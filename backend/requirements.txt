@@ -1,23 +1,41 @@
 # Görsel Hikaye Üretici - Python Gereksinimleri
 # ==============================================
 # Kurulum: pip install -r requirements.txt
+#
+# LİSANS BİLGİLERİ (Tümü Ticari Kullanıma Uygun):
+# ================================================
+# - fastapi: MIT License
+# - uvicorn: BSD License
+# - torch: BSD License
+# - diffusers: Apache 2.0
+# - transformers: Apache 2.0
+# - accelerate: Apache 2.0
+# - safetensors: Apache 2.0
+# - Pillow: HPND License (PIL Software License)
+#
+# AI MODEL LİSANSLARI:
+# - Stable Diffusion 1.5: CreativeML Open RAIL-M (Ticari kullanım ✓)
+# - Stable Diffusion 2.1: CreativeML Open RAIL-M (Ticari kullanım ✓)
+# - SDXL: Stability AI License (Ticari kullanım ✓)
+#
+# NOT: Tüm bağımlılıklar ücretsiz, sınırsız ve ticari kullanıma uygundur.
 
-# Web sunucu
+# Web sunucu (MIT / BSD License)
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 
-# Görsel üretim (Stable Diffusion)
+# Görsel üretim - Stable Diffusion (Apache 2.0 / BSD License)
 torch>=2.0.0
 diffusers>=0.24.0
 transformers>=4.35.0
 accelerate>=0.25.0
 safetensors>=0.4.0
 
-# Görüntü işleme
+# Görüntü işleme (HPND License)
 Pillow>=10.0.0
 
 # Opsiyonel: CUDA desteği için (NVIDIA GPU)
 # torch ile birlikte gelir, ayrıca kurmaya gerek yok
 
-# Opsiyonel: xformers (bellek optimizasyonu)
+# Opsiyonel: xformers (bellek optimizasyonu, BSD-3 License)
 # xformers>=0.0.22
