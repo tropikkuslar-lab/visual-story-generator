@@ -178,10 +178,16 @@ class UnifiedPromptEnhancer:
     ) -> str:
         """
         Prompt'u minimum düzeyde zenginleştir.
-        Frontend zaten ağır prompt basıyorsa, çok az şey ekle.
+        ÖNEMLİ: İçerik (prompt) EN BAŞTA olmalı, kalite etiketleri SONRA!
+        Frontend zaten içerik öncelikli prompt gönderir.
         """
         parts = []
 
+        # ===== İÇERİK (PROMPT) EN BAŞTA =====
+        # Bu en kritik kısım - AI modeli ilk kelimelere öncelik verir
+        parts.append(prompt.strip())
+
+        # ===== KALİTE ETİKETLERİ SONRA =====
         # Model zorunlu ekleri
         model_reqs = cls.MODEL_REQUIREMENTS.get(model_type, [])
         for req in model_reqs:
@@ -194,9 +200,6 @@ class UnifiedPromptEnhancer:
                 if tag.lower() not in prompt.lower():
                     parts.append(tag)
 
-        # Ana prompt
-        parts.append(prompt.strip())
-
         # Öğrenme optimizasyonları (varsa ve güven yüksekse)
         if optimization and optimization.confidence > 0.5:
             for addition in optimization.prompt_additions[:3]:  # Max 3 ek
@@ -205,12 +208,15 @@ class UnifiedPromptEnhancer:
 
         # Duygu görsel ipuçları (varsa)
         if emotion and emotion.intensity >= 5:
-            visual = emotion_analyzer.get_visual_prompt(emotion)
-            if visual and len(visual) < 100:  # Çok uzun olmasın
-                # Sadece atmosfer ekle, renk/ışık zaten prompt'ta olabilir
-                atmosphere = emotion.visual_cues.get('atmosphere', '')
-                if atmosphere and atmosphere.lower() not in prompt.lower():
-                    parts.append(atmosphere)
+            try:
+                visual = emotion_analyzer.get_visual_prompt(emotion)
+                if visual and len(visual) < 100:  # Çok uzun olmasın
+                    # Sadece atmosfer ekle, renk/ışık zaten prompt'ta olabilir
+                    atmosphere = emotion.visual_cues.get('atmosphere', '')
+                    if atmosphere and atmosphere.lower() not in prompt.lower():
+                        parts.append(atmosphere)
+            except:
+                pass
 
         return ", ".join(parts)
 
