@@ -326,6 +326,42 @@ Seçilen format (en-boy oranı) otomatik olarak çözünürlük hesaplamasına y
 
 ---
 
+## v4.0 Akıllı Analiz Sistemi
+
+### Gelişmiş Türkçe NLP (turkish_nlp.py)
+- **Morfolojik Analiz**: Fiil/isim tespiti, zaman ekleri, hal ekleri
+- **Cümle Yapısı Analizi**: Özne, yüklem, nesne, zarf tümleçleri
+- **Varlık Tanıma (NER)**: Kişi, yer, zaman otomatik tespiti
+- **Tema Tespiti**: 15+ tema kategorisi (aşk, ölüm, savaş, macera, vb.)
+- **Mood Analizi**: 10 mood türü ile görsel eşleştirme
+
+### Bağlam Farkındalığı (context_analyzer.py)
+- **Zamir Çözümleme**: "o", "ona", "onun" gibi zamirleri doğru karaktere eşleme
+- **Sahne Bağlamı**: Her sahne için konum, zaman, mood takibi
+- **Karakter Durumu**: Karakterlerin son aksiyonu, konumu, duygu durumu
+- **Hikaye Sürekliliği**: Sahneler arası tutarlılık kontrolü
+- **Anlatı Perspektifi**: 1. şahıs / 3. şahıs otomatik tespit
+
+### Dinamik Prompt Ağırlıklandırma (prompt_weighting.py)
+- **SD Attention Syntax**: ((önemli)), [az önemli], (text:1.3) formatları
+- **Kategori Bazlı Ağırlıklar**: Özne 1.3x, aksiyon 1.2x, duygu 1.15x
+- **Tema Ayarlamaları**: Korku → atmosfer+40%, romantik → duygu+40%
+- **Duygu Yoğunluğu**: 1-10 skalasında ağırlık çarpanları
+
+### Sahne Kompozisyon Analizi
+- **Kompozisyon Kuralları**: Üçler kuralı, altın oran, simetri
+- **Kamera Açısı Önerileri**: Aksiyon → dinamik açı, diyalog → omuz çekimi
+- **Görsel Denge**: Işık/karanlık, ön plan/arka plan, karmaşıklık analizi
+- **Framing Önerileri**: Karakter sayısına göre kadraj
+
+### Akıllı Entegrasyon (smart_analyzer.py)
+- **Birleşik API**: Tek çağrı ile tüm analizler
+- **Kalite Skorlaması**: Analiz güveni ve prompt kalitesi
+- **Feedback Öğrenme**: Geri bildirimlerden sürekli iyileşme
+- **İstatistikler**: Öğrenme ve bağlam metrikleri
+
+---
+
 ## Teknik Özellikler
 
 ### Frontend
@@ -424,7 +460,11 @@ visual-story-generator/
 │       ├── idiomPatterns.ts # Türkçe deyim/mecaz kalıpları
 │       └── abstractConcepts.ts # Soyut kavram görselleştirme
 ├── backend/
-│   ├── server.py            # FastAPI sunucusu (v3.0)
+│   ├── server.py            # FastAPI sunucusu (v4.0)
+│   ├── smart_analyzer.py    # Akıllı analiz entegrasyonu
+│   ├── turkish_nlp.py       # Gelişmiş Türkçe NLP
+│   ├── context_analyzer.py  # Bağlam farkındalığı
+│   ├── prompt_weighting.py  # Dinamik prompt ağırlıklandırma
 │   ├── database.py          # SQLite veritabanı yönetimi
 │   ├── learning_manager.py  # Öğrenme ve optimizasyon sistemi
 │   ├── emotion_analyzer.py  # Gelişmiş duygu analizi
@@ -438,7 +478,7 @@ visual-story-generator/
 
 ---
 
-## API Endpoints (v3.0)
+## API Endpoints (v4.0)
 
 | Endpoint | Method | Açıklama |
 |----------|--------|----------|
@@ -447,6 +487,8 @@ visual-story-generator/
 | `/api/feedback` | POST | Geri bildirim gönder |
 | `/api/learning/stats` | GET | Öğrenme istatistikleri |
 | `/api/analyze-emotion` | POST | Duygu analizi yap |
+| `/api/analyze-text` | POST | Akıllı metin analizi (v4.0) |
+| `/api/analyze-scene` | POST | Sahne analizi (v4.0) |
 | `/api/cleanup` | POST | Eski dosyaları temizle |
 | `/generated_images/{filename}` | GET | Üretilen görseli getir |
 
