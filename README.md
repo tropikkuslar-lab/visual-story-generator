@@ -290,6 +290,42 @@ Seçilen format (en-boy oranı) otomatik olarak çözünürlük hesaplamasına y
 
 ---
 
+## v3.0 Yeni Özellikler
+
+### Öğrenme Sistemi
+- **SQLite Veritabanı**: Tüm üretimler ve geri bildirimler kalıcı olarak saklanır
+- **Feedback Sistemi**: 1-5 arası puanlama ve hata kategorileri
+- **Öğrenilen Örüntüler**: Başarılı üretimlerin ortak özelliklerini öğrenir
+- **Otomatik Optimizasyon**: Scene type + mood + genre kombinasyonları için en iyi ayarları bulur
+
+### Gelişmiş Duygu Analizi
+- **13 Duygu Sınıfı**: Sevinç, üzüntü, öfke, korku, şaşkınlık, iğrenme, güven, beklenti, nostalji, umut, çaresizlik, romantizm, nötr
+- **Yoğunluk Ölçümü (1-10)**: Her duygunun yoğunluğu hassas olarak ölçülür
+- **Olumsuzlama Algılama**: "mutlu değil", "sevmiyorum" gibi ifadeleri doğru yorumlar
+- **Bağlam Farkındalığı**: Yoğunluk artırıcı/azaltıcılar: "çok", "aşırı", "biraz", "hafif"
+- **Görsel İpuçları**: Her duygu için renk, ışık, atmosfer önerileri
+
+### Güvenlik Katmanı
+- **NSFW/Şiddet Filtresi**: Yasaklı içerik otomatik engellenir
+- **Path Güvenliği**: Path traversal saldırıları engellenir
+- **Rate Limiting**: Dakikada 30 istek sınırı (DDoS koruması)
+- **UUID Tabanlı Job ID**: Güvenli ve tahmin edilemez iş kimlikleri
+- **CORS Konfigürasyonu**: Production ve development ortamları için ayrı ayarlar
+
+### GPU Stabilite
+- **OOM Koruması**: Bellek yetersizliğinde otomatik kurtarma
+- **Otomatik Yeniden Deneme**: Küçültülmüş boyutta tekrar deneme
+- **VRAM İzleme**: Anlık GPU bellek kullanımı takibi
+- **Dinamik Önbellek Temizleme**: Gerektiğinde otomatik cache temizliği
+- **Eşzamanlı İş Limiti**: Maksimum 3 paralel üretim
+
+### Prompt Yönetimi
+- **Tek Nokta Güçlendirme**: Prompt şişmesini önleyen unified enhancer
+- **Öğrenilmiş Eklemeler**: Başarılı üretimlerden öğrenilen prompt eklemeleri
+- **Hata Düzeltmeleri**: El, yüz, bulanıklık sorunları için otomatik negatif prompt
+
+---
+
 ## Teknik Özellikler
 
 ### Frontend
@@ -304,6 +340,7 @@ Seçilen format (en-boy oranı) otomatik olarak çözünürlük hesaplamasına y
 - **Stable Diffusion 1.5** - Görsel üretim modeli
 - **PyTorch** - Derin öğrenme framework
 - **Diffusers** - Hugging Face model kütüphanesi
+- **SQLite** - Hafif ve güvenilir veritabanı (v3.0)
 
 ### Desteklenen Platformlar
 - NVIDIA GPU (CUDA) - Önerilen
@@ -369,17 +406,35 @@ python server.py
 ```
 visual-story-generator/
 ├── src/
-│   ├── App.tsx          # Ana uygulama (tüm analiz fonksiyonları)
-│   ├── main.tsx         # React giriş noktası
-│   └── index.css        # Global stiller
+│   ├── App.tsx              # Ana uygulama (tüm analiz fonksiyonları)
+│   ├── main.tsx             # React giriş noktası
+│   └── index.css            # Global stiller
 ├── backend/
-│   ├── server.py        # FastAPI sunucusu
-│   ├── requirements.txt # Python bağımlılıkları
-│   ├── setup.sh         # Linux/macOS kurulum
-│   └── setup.bat        # Windows kurulum
-├── public/              # Statik dosyalar
-└── dist/               # Build çıktısı
+│   ├── server.py            # FastAPI sunucusu (v3.0)
+│   ├── database.py          # SQLite veritabanı yönetimi
+│   ├── learning_manager.py  # Öğrenme ve optimizasyon sistemi
+│   ├── emotion_analyzer.py  # Gelişmiş duygu analizi
+│   ├── security.py          # Güvenlik katmanı
+│   ├── requirements.txt     # Python bağımlılıkları
+│   ├── setup.sh             # Linux/macOS kurulum
+│   └── setup.bat            # Windows kurulum
+├── public/                  # Statik dosyalar
+└── dist/                    # Build çıktısı
 ```
+
+---
+
+## API Endpoints (v3.0)
+
+| Endpoint | Method | Açıklama |
+|----------|--------|----------|
+| `/api/generate` | POST | Görsel üretimi başlat |
+| `/api/status/{job_id}` | GET | Üretim durumunu sorgula |
+| `/api/feedback` | POST | Geri bildirim gönder |
+| `/api/learning/stats` | GET | Öğrenme istatistikleri |
+| `/api/analyze-emotion` | POST | Duygu analizi yap |
+| `/api/cleanup` | POST | Eski dosyaları temizle |
+| `/generated_images/{filename}` | GET | Üretilen görseli getir |
 
 ---
 
