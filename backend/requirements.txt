@@ -1,0 +1,23 @@
+# Görsel Hikaye Üretici - Python Gereksinimleri
+# ==============================================
+# Kurulum: pip install -r requirements.txt
+
+# Web sunucu
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Görsel üretim (Stable Diffusion)
+torch>=2.0.0
+diffusers>=0.24.0
+transformers>=4.35.0
+accelerate>=0.25.0
+safetensors>=0.4.0
+
+# Görüntü işleme
+Pillow>=10.0.0
+
+# Opsiyonel: CUDA desteği için (NVIDIA GPU)
+# torch ile birlikte gelir, ayrıca kurmaya gerek yok
+
+# Opsiyonel: xformers (bellek optimizasyonu)
+# xformers>=0.0.22
