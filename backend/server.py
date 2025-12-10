@@ -573,6 +573,9 @@ class ImageGenerator:
             generator = torch.Generator(device=self.device_manager.device).manual_seed(seed)
 
             logger.info(f"Görsel üretiliyor: {config['name']} {width}x{height} steps={steps}")
+            logger.info(f"===== PROMPT (ilk 500 karakter) =====")
+            logger.info(f"{enhanced_prompt[:500]}...")
+            logger.info(f"=====================================")
 
             start_time = time.time()
 
