@@ -1,16 +1,16 @@
 """
-Görsel Hikaye Üretici - Gelişmiş Yerel Görsel Üretim Backend
-=============================================================
-Çoklu model desteği, kalite modları, optimize prompt mühendisliği.
+Görsel Hikaye Üretici - Gelişmiş Yerel Görsel Üretim Backend v3.0
+=================================================================
+Öğrenme sistemi, gelişmiş güvenlik, optimize prompt yönetimi.
 
-Desteklenen Modeller:
-- SD 1.5: Hızlı, düşük VRAM (4GB+)
-- SDXL: Yüksek kalite (8GB+ VRAM)
-- SDXL Turbo: Hızlı yüksek kalite (8GB+)
-- SDXL Lightning: Ultra hızlı (8GB+)
-
-Kullanım:
-    python server.py
+Yenilikler v3.0:
+- SQLite tabanlı öğrenme sistemi
+- Feedback ve kalite metrikleri
+- NSFW/şiddet filtreleme
+- Gelişmiş duygu analizi
+- Prompt şişmesi önleme
+- GPU/VRAM stabilite
+- Path güvenliği
 """
 
 import os
@@ -24,24 +24,42 @@ import gc
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from enum import Enum
+import traceback
 
 # FastAPI imports
 try:
-    from fastapi import FastAPI, HTTPException, BackgroundTasks
+    from fastapi import FastAPI, HTTPException, Request, Depends
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse, JSONResponse
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field
+    import uvicorn
 except ImportError:
     print("FastAPI kurulu değil. Kurmak için: pip install fastapi uvicorn")
     sys.exit(1)
 
+# Local modules
+try:
+    from database import db, Generation, Feedback
+    from learning_manager import learning_manager, OptimizationResult
+    from security import (
+        ContentFilter, PathSecurity, JobIdManager, RateLimiter,
+        OutputCleaner, RequestValidator, get_cors_config
+    )
+    from emotion_analyzer import emotion_analyzer, EmotionResult
+except ImportError as e:
+    print(f"Modül import hatası: {e}")
+    print("Modüller yüklenemedi, temel modda çalışılacak.")
+
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('server.log', encoding='utf-8')
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -52,18 +70,17 @@ class DeviceMode(str, Enum):
     CPU = "cpu"
 
 class QualityMode(str, Enum):
-    FAST = "fast"          # 4-8 steps, lower quality, very fast
-    BALANCED = "balanced"  # 15-20 steps, good quality
-    QUALITY = "quality"    # 25-30 steps, high quality
-    ULTRA = "ultra"        # 40+ steps, maximum quality
+    FAST = "fast"
+    BALANCED = "balanced"
+    QUALITY = "quality"
+    ULTRA = "ultra"
 
 class ModelType(str, Enum):
-    SD15 = "sd15"              # Stable Diffusion 1.5
-    SDXL = "sdxl"              # SDXL Base
-    SDXL_TURBO = "sdxl_turbo"  # SDXL Turbo (fast)
-    SDXL_LIGHTNING = "sdxl_lightning"  # ByteDance SDXL Lightning
+    SD15 = "sd15"
+    SDXL = "sdxl"
+    SDXL_TURBO = "sdxl_turbo"
+    SDXL_LIGHTNING = "sdxl_lightning"
 
-# Model configurations
 MODEL_CONFIGS = {
     ModelType.SD15: {
         "id": "runwayml/stable-diffusion-v1-5",
@@ -102,7 +119,6 @@ MODEL_CONFIGS = {
     }
 }
 
-# Quality mode settings
 QUALITY_SETTINGS = {
     QualityMode.FAST: {"steps": 8, "guidance": 5.0, "desc": "Çok hızlı (~5s GPU)"},
     QualityMode.BALANCED: {"steps": 20, "guidance": 7.0, "desc": "Dengeli (~15s GPU)"},
@@ -118,121 +134,113 @@ class ServerConfig:
     model_cache_dir: str = "./models"
     max_queue_size: int = 10
     max_concurrent_jobs: int = 1
+    max_retries: int = 2
+    cleanup_interval_hours: int = 24
+    production: bool = False
 
 CONFIG = ServerConfig()
 
-# ============== Prompt Enhancement ==============
+# ============== Unified Prompt Enhancer ==============
 
-class PromptEnhancer:
-    """Prompt'ları daha iyi görsel sonuçlar için optimize eder"""
+class UnifiedPromptEnhancer:
+    """
+    Tek noktadan prompt güçlendirme - Şişmeyi önler.
+    Frontend'den gelen prompt'u ZATENzenginleştirilmiş kabul eder,
+    sadece eksik kritik öğeleri ekler.
+    """
 
-    # Stil bazlı prompt ekleri
-    STYLE_ENHANCERS = {
-        "cinematic": "cinematic lighting, film grain, dramatic composition, movie scene, 35mm film, anamorphic lens",
-        "anime": "anime style, studio ghibli, vibrant colors, detailed illustration, cel shading",
-        "comic": "comic book style, bold outlines, halftone dots, dynamic pose, marvel dc style",
-        "digital": "digital art, artstation trending, highly detailed, sharp focus, 8k uhd",
-        "oil": "oil painting, impressionist, visible brushstrokes, renaissance style, classical art",
-        "watercolor": "watercolor painting, soft edges, flowing colors, paper texture, delicate",
-        "minimal": "minimalist, clean lines, simple shapes, flat design, modern aesthetic",
-        "realistic": "photorealistic, hyperrealistic, ultra detailed, 8k resolution, professional photography"
+    # Temel kalite etiketleri (sadece eksikse ekle)
+    CORE_QUALITY = ["best quality", "highly detailed"]
+
+    # Model-spesifik zorunlu ekler
+    MODEL_REQUIREMENTS = {
+        ModelType.SD15: [],
+        ModelType.SDXL: ["masterpiece"],
+        ModelType.SDXL_TURBO: [],
+        ModelType.SDXL_LIGHTNING: []
     }
 
-    # Kalite artırıcı promptlar
-    QUALITY_BOOSTERS = [
-        "masterpiece",
-        "best quality",
-        "highly detailed",
-        "sharp focus",
-        "professional"
-    ]
-
-    # Negatif prompt şablonu (istenmeyen öğeler)
-    NEGATIVE_PROMPT_BASE = (
-        "blurry, low quality, bad anatomy, bad hands, text, error, missing fingers, "
-        "extra digit, fewer digits, cropped, worst quality, low resolution, bad composition, "
-        "ugly, duplicate, morbid, mutilated, out of frame, mutation, deformed, "
-        "watermark, signature, username, jpeg artifacts"
+    # Temel negatif prompt (her zaman ekle)
+    BASE_NEGATIVE = (
+        "blurry, low quality, bad anatomy, bad hands, text, error, "
+        "worst quality, low resolution, ugly, duplicate, morbid, "
+        "watermark, signature, jpeg artifacts"
     )
 
-    # Stil bazlı negatif promptlar
-    STYLE_NEGATIVES = {
-        "anime": "realistic, photograph, 3d render",
-        "realistic": "cartoon, anime, illustration, drawing, painting",
-        "oil": "digital art, 3d render, photograph",
-        "watercolor": "digital art, sharp edges, photograph"
-    }
-
     @classmethod
-    def enhance_prompt(
+    def enhance(
         cls,
         prompt: str,
-        style: str = "cinematic",
-        quality_mode: QualityMode = QualityMode.BALANCED,
-        mood: str = "",
-        lighting: str = "",
-        add_quality_tags: bool = True
+        model_type: ModelType,
+        optimization: Optional[OptimizationResult] = None,
+        emotion: Optional[EmotionResult] = None,
+        add_core_quality: bool = True
     ) -> str:
-        """Prompt'u stil ve kalite için optimize et"""
-
+        """
+        Prompt'u minimum düzeyde zenginleştir.
+        Frontend zaten ağır prompt basıyorsa, çok az şey ekle.
+        """
         parts = []
 
-        # Kalite etiketleri
-        if add_quality_tags:
-            if quality_mode in [QualityMode.QUALITY, QualityMode.ULTRA]:
-                parts.extend(cls.QUALITY_BOOSTERS)
-            elif quality_mode == QualityMode.BALANCED:
-                parts.extend(cls.QUALITY_BOOSTERS[:3])
+        # Model zorunlu ekleri
+        model_reqs = cls.MODEL_REQUIREMENTS.get(model_type, [])
+        for req in model_reqs:
+            if req.lower() not in prompt.lower():
+                parts.append(req)
+
+        # Çekirdek kalite (sadece yoksa)
+        if add_core_quality:
+            for tag in cls.CORE_QUALITY:
+                if tag.lower() not in prompt.lower():
+                    parts.append(tag)
 
         # Ana prompt
         parts.append(prompt.strip())
 
-        # Stil ekle
-        style_key = style.lower()
-        if style_key in cls.STYLE_ENHANCERS:
-            parts.append(cls.STYLE_ENHANCERS[style_key])
+        # Öğrenme optimizasyonları (varsa ve güven yüksekse)
+        if optimization and optimization.confidence > 0.5:
+            for addition in optimization.prompt_additions[:3]:  # Max 3 ek
+                if addition.lower() not in prompt.lower():
+                    parts.append(addition)
 
-        # Mood varsa ekle
-        if mood and mood.lower() != "nötr":
-            mood_map = {
-                "huzurlu": "peaceful atmosphere, serene, calm mood",
-                "gerilimli": "tense atmosphere, dramatic, suspenseful",
-                "mutlu": "joyful mood, bright, cheerful atmosphere",
-                "hüzünlü": "melancholic mood, somber, emotional",
-                "romantik": "romantic atmosphere, warm, intimate",
-                "gizemli": "mysterious atmosphere, enigmatic, dark",
-                "epik": "epic scale, grandiose, majestic"
-            }
-            if mood.lower() in mood_map:
-                parts.append(mood_map[mood.lower()])
-
-        # Işık varsa ekle
-        if lighting and lighting.lower() != "doğal":
-            light_map = {
-                "gündüz - parlak": "bright daylight, sun rays, natural lighting",
-                "gün batımı - altın": "golden hour, sunset lighting, warm tones",
-                "gece - ay ışığı": "moonlight, night scene, cool blue tones",
-                "sisli - atmosferik": "foggy, atmospheric, misty, volumetric lighting",
-                "iç mekan - yumuşak": "soft indoor lighting, ambient light",
-                "dramatik - kontrast": "dramatic lighting, high contrast, chiaroscuro"
-            }
-            if lighting.lower() in light_map:
-                parts.append(light_map[lighting.lower()])
+        # Duygu görsel ipuçları (varsa)
+        if emotion and emotion.intensity >= 5:
+            visual = emotion_analyzer.get_visual_prompt(emotion)
+            if visual and len(visual) < 100:  # Çok uzun olmasın
+                # Sadece atmosfer ekle, renk/ışık zaten prompt'ta olabilir
+                atmosphere = emotion.visual_cues.get('atmosphere', '')
+                if atmosphere and atmosphere.lower() not in prompt.lower():
+                    parts.append(atmosphere)
 
         return ", ".join(parts)
 
     @classmethod
-    def get_negative_prompt(cls, style: str = "cinematic") -> str:
-        """Stil bazlı negatif prompt döndür"""
-        negative = cls.NEGATIVE_PROMPT_BASE
+    def get_negative_prompt(
+        cls,
+        user_negative: str = "",
+        optimization: Optional[OptimizationResult] = None,
+        add_safety: bool = True
+    ) -> str:
+        """Negatif prompt oluştur"""
+        parts = [cls.BASE_NEGATIVE]
 
-        style_key = style.lower()
-        if style_key in cls.STYLE_NEGATIVES:
-            negative += ", " + cls.STYLE_NEGATIVES[style_key]
+        # Kullanıcı negatifi
+        if user_negative:
+            parts.append(user_negative)
 
-        return negative
+        # Güvenlik filtreleri
+        if add_safety:
+            parts.append(ContentFilter.get_safe_negative_prompt())
 
-# ============== Device Detection ==============
+        # Öğrenme düzeltmeleri
+        if optimization and optimization.confidence > 0.5:
+            for neg in optimization.negative_additions[:5]:  # Max 5
+                if neg.lower() not in parts[0].lower():
+                    parts.append(neg)
+
+        return ", ".join(parts)
+
+# ============== Device Manager ==============
 
 class DeviceManager:
     """GPU/CPU otomatik algılama ve yönetim"""
@@ -242,6 +250,7 @@ class DeviceManager:
         self.device: str = "cpu"
         self.gpu_info: Optional[str] = None
         self.vram_gb: float = 0
+        self.vram_free_gb: float = 0
         self._detect_device()
 
     def _detect_device(self):
@@ -251,14 +260,16 @@ class DeviceManager:
                 self.mode = DeviceMode.GPU
                 self.device = "cuda"
                 self.gpu_info = torch.cuda.get_device_name(0)
-                self.vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                props = torch.cuda.get_device_properties(0)
+                self.vram_gb = props.total_memory / (1024**3)
+                self._update_free_vram()
                 logger.info(f"GPU algılandı: {self.gpu_info} ({self.vram_gb:.1f}GB VRAM)")
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 self.mode = DeviceMode.GPU
                 self.device = "mps"
                 self.gpu_info = "Apple Silicon (MPS)"
-                self.vram_gb = 8  # Varsayılan
-                logger.info(f"Apple Silicon algılandı")
+                self.vram_gb = 8
+                logger.info("Apple Silicon algılandı")
             else:
                 self.mode = DeviceMode.CPU
                 self.device = "cpu"
@@ -268,8 +279,29 @@ class DeviceManager:
             self.mode = DeviceMode.CPU
             self.device = "cpu"
 
+    def _update_free_vram(self):
+        """Boş VRAM miktarını güncelle"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                free, total = torch.cuda.mem_get_info()
+                self.vram_free_gb = free / (1024**3)
+        except:
+            self.vram_free_gb = self.vram_gb * 0.8
+
+    def check_vram_for_size(self, width: int, height: int, model: ModelType) -> bool:
+        """Belirtilen boyut için yeterli VRAM var mı"""
+        self._update_free_vram()
+
+        # Tahmini VRAM kullanımı (MB)
+        pixels = width * height
+        base_usage = MODEL_CONFIGS[model].get("min_vram", 4)
+        size_factor = pixels / (512 * 512)
+        estimated_usage = base_usage * size_factor
+
+        return self.vram_free_gb >= estimated_usage
+
     def get_available_models(self) -> List[Dict[str, Any]]:
-        """Kullanılabilir modelleri döndür"""
         models = []
         for model_type, config in MODEL_CONFIGS.items():
             available = self.vram_gb >= config["min_vram"] or self.mode == DeviceMode.CPU
@@ -286,7 +318,6 @@ class DeviceManager:
         return models
 
     def get_recommended_model(self) -> ModelType:
-        """VRAM'e göre önerilen modeli döndür"""
         if self.vram_gb >= 10:
             return ModelType.SDXL
         elif self.vram_gb >= 8:
@@ -294,10 +325,22 @@ class DeviceManager:
         else:
             return ModelType.SD15
 
-# ============== Image Generator ==============
+    def clear_cache(self):
+        """GPU belleğini temizle"""
+        try:
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.info("GPU cache temizlendi")
+        except Exception as e:
+            logger.warning(f"Cache temizleme hatası: {e}")
+
+# ============== Image Generator with Stability ==============
 
 class ImageGenerator:
-    """Gelişmiş Stable Diffusion görsel üretici"""
+    """Gelişmiş Stable Diffusion görsel üretici - OOM koruması dahil"""
 
     def __init__(self, device_manager: DeviceManager):
         self.device_manager = device_manager
@@ -305,9 +348,10 @@ class ImageGenerator:
         self.current_model: Optional[ModelType] = None
         self.loading = False
         self._lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._max_consecutive_failures = 3
 
     def load_model(self, model_type: ModelType, force_reload: bool = False) -> bool:
-        """Belirtilen modeli yükle"""
         with self._lock:
             if model_type in self.pipes and not force_reload:
                 self.current_model = model_type
@@ -333,36 +377,27 @@ class ImageGenerator:
             model_id = config["id"]
 
             logger.info(f"Model yükleniyor: {config['name']}")
-            logger.info(f"(İlk seferde indirilecek, sonra offline çalışır)")
 
             cache_dir = Path(CONFIG.model_cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
 
-            # Dtype seçimi
-            if self.device_manager.mode == DeviceMode.GPU:
-                dtype = torch.float16
-            else:
-                dtype = torch.float32
-
-            # Eski modeli temizle (bellek için)
+            # Eski modeli temizle
             if self.current_model and self.current_model in self.pipes:
                 del self.pipes[self.current_model]
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                self.device_manager.clear_cache()
 
-            # Model tipine göre pipeline oluştur
+            dtype = torch.float16 if self.device_manager.mode == DeviceMode.GPU else torch.float32
+
+            # Model tipine göre pipeline
             if model_type == ModelType.SD15:
                 pipe = StableDiffusionPipeline.from_pretrained(
                     model_id,
                     torch_dtype=dtype,
                     cache_dir=str(cache_dir),
-                    safety_checker=None,
+                    safety_checker=None,  # Manuel filtre kullanıyoruz
                     requires_safety_checker=False
                 )
-                pipe.scheduler = DPMSolverMultistepScheduler.from_config(
-                    pipe.scheduler.config
-                )
+                pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
 
             elif model_type == ModelType.SDXL:
                 pipe = StableDiffusionXLPipeline.from_pretrained(
@@ -386,10 +421,7 @@ class ImageGenerator:
                 )
 
             elif model_type == ModelType.SDXL_LIGHTNING:
-                # SDXL Lightning için base model + LoRA
-                from diffusers import UNet2DConditionModel
                 base = "stabilityai/stable-diffusion-xl-base-1.0"
-
                 pipe = StableDiffusionXLPipeline.from_pretrained(
                     base,
                     torch_dtype=dtype,
@@ -400,7 +432,6 @@ class ImageGenerator:
                     pipe.scheduler.config,
                     timestep_spacing="trailing"
                 )
-                # Lightning LoRA yükle
                 pipe.load_lora_weights(
                     "ByteDance/SDXL-Lightning",
                     weight_name="sdxl_lightning_4step_lora.safetensors",
@@ -408,7 +439,6 @@ class ImageGenerator:
                 )
                 pipe.fuse_lora()
 
-            # Cihaza taşı
             pipe = pipe.to(self.device_manager.device)
 
             # Bellek optimizasyonları
@@ -422,12 +452,12 @@ class ImageGenerator:
 
             self.pipes[model_type] = pipe
             self.current_model = model_type
+            self._consecutive_failures = 0
             logger.info(f"Model başarıyla yüklendi: {config['name']}")
             return True
 
         except Exception as e:
             logger.error(f"Model yükleme hatası: {e}")
-            import traceback
             traceback.print_exc()
             return False
         finally:
@@ -444,17 +474,17 @@ class ImageGenerator:
         seed: Optional[int] = None,
         model_type: Optional[ModelType] = None,
         quality_mode: QualityMode = QualityMode.BALANCED,
-        style: str = "cinematic",
+        scene_type: str = "",
         mood: str = "",
-        lighting: str = ""
+        genre: str = "",
+        style: str = "cinematic",
+        retry_count: int = 0
     ) -> Optional[Dict[str, Any]]:
-        """Gelişmiş görsel üretimi"""
+        """OOM korumalı görsel üretimi"""
 
-        # Model seçimi
         if model_type is None:
             model_type = self.device_manager.get_recommended_model()
 
-        # Model yükle
         if model_type not in self.pipes:
             if not self.load_model(model_type):
                 return None
@@ -462,69 +492,95 @@ class ImageGenerator:
         pipe = self.pipes[model_type]
         config = MODEL_CONFIGS[model_type]
 
-        # Prompt'u zenginleştir
-        enhanced_prompt = PromptEnhancer.enhance_prompt(
+        # Duygu analizi
+        emotion = None
+        try:
+            emotion = emotion_analyzer.analyze(prompt)
+        except:
+            pass
+
+        # Öğrenme optimizasyonları
+        optimization = None
+        try:
+            optimization = learning_manager.get_optimized_settings(
+                scene_type=scene_type,
+                mood=mood,
+                genre=genre,
+                base_steps=steps,
+                base_cfg=guidance_scale
+            )
+        except:
+            pass
+
+        # Prompt'u minimize düzeyde zenginleştir
+        enhanced_prompt = UnifiedPromptEnhancer.enhance(
             prompt=prompt,
-            style=style,
-            quality_mode=quality_mode,
-            mood=mood,
-            lighting=lighting
+            model_type=model_type,
+            optimization=optimization,
+            emotion=emotion,
+            add_core_quality=True
         )
 
         # Negatif prompt
-        if not negative_prompt:
-            negative_prompt = PromptEnhancer.get_negative_prompt(style)
+        final_negative = UnifiedPromptEnhancer.get_negative_prompt(
+            user_negative=negative_prompt,
+            optimization=optimization,
+            add_safety=True
+        )
 
-        # Kalite ayarları
+        # Ayarları uygula
         quality_config = QUALITY_SETTINGS[quality_mode]
 
-        # Model özel ayarları
         if "fixed_steps" in config:
             steps = config["fixed_steps"]
         else:
             steps = quality_config["steps"]
+            if optimization:
+                steps += optimization.steps_adjustment
 
         if "guidance_scale" in config:
             guidance_scale = config["guidance_scale"]
         else:
             guidance_scale = quality_config["guidance"]
+            if optimization:
+                guidance_scale += optimization.cfg_adjustment
 
         # Boyut sınırlaması
         max_size = config["max_size"]
         width = min(width, max_size)
         height = min(height, max_size)
-
-        # 8'e bölünebilir olmalı
         width = (width // 8) * 8
         height = (height // 8) * 8
+
+        # VRAM kontrolü
+        if not self.device_manager.check_vram_for_size(width, height, model_type):
+            logger.warning(f"Yetersiz VRAM, boyut küçültülüyor: {width}x{height}")
+            width = min(width, 512)
+            height = min(height, 512)
 
         try:
             import torch
 
-            # Seed
             if seed is None:
                 seed = int(time.time() * 1000) % (2**32)
 
             generator = torch.Generator(device=self.device_manager.device).manual_seed(seed)
 
-            logger.info(f"Görsel üretiliyor:")
-            logger.info(f"  Model: {config['name']}")
-            logger.info(f"  Boyut: {width}x{height}")
-            logger.info(f"  Steps: {steps}")
-            logger.info(f"  Prompt: {enhanced_prompt[:100]}...")
+            logger.info(f"Görsel üretiliyor: {config['name']} {width}x{height} steps={steps}")
 
             start_time = time.time()
 
             # Üretim
-            result = pipe(
-                prompt=enhanced_prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_inference_steps=steps,
-                guidance_scale=guidance_scale,
-                generator=generator
-            )
+            with torch.inference_mode():
+                result = pipe(
+                    prompt=enhanced_prompt,
+                    negative_prompt=final_negative,
+                    width=width,
+                    height=height,
+                    num_inference_steps=steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator
+                )
 
             image = result.images[0]
 
@@ -532,8 +588,7 @@ class ImageGenerator:
             output_dir = Path(CONFIG.output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"scene_{timestamp}_{seed}.png"
+            filename = PathSecurity.generate_secure_filename("scene", ".png")
             filepath = output_dir / filename
 
             image.save(filepath, quality=95)
@@ -541,23 +596,91 @@ class ImageGenerator:
             elapsed = time.time() - start_time
             logger.info(f"Görsel üretildi: {filename} ({elapsed:.1f}s)")
 
+            self._consecutive_failures = 0
+
+            # Öğrenme sistemine kaydet
+            try:
+                learning_manager.record_generation(
+                    job_id=filename.replace('.png', ''),
+                    prompt=prompt,
+                    enhanced_prompt=enhanced_prompt,
+                    negative_prompt=final_negative,
+                    scene_type=scene_type,
+                    mood=mood,
+                    genre=genre,
+                    style=style,
+                    width=width,
+                    height=height,
+                    steps=steps,
+                    cfg_scale=guidance_scale,
+                    seed=seed,
+                    model=config["name"],
+                    generation_time=elapsed,
+                    image_path=str(filepath)
+                )
+            except Exception as e:
+                logger.warning(f"Öğrenme kaydı hatası: {e}")
+
             return {
                 "filepath": str(filepath),
                 "filename": filename,
                 "seed": seed,
                 "model": config["name"],
                 "enhanced_prompt": enhanced_prompt,
-                "negative_prompt": negative_prompt,
+                "negative_prompt": final_negative,
                 "width": width,
                 "height": height,
                 "steps": steps,
                 "guidance_scale": guidance_scale,
-                "generation_time": round(elapsed, 2)
+                "generation_time": round(elapsed, 2),
+                "emotion": {
+                    "class": emotion.primary_emotion.value if emotion else None,
+                    "intensity": emotion.intensity if emotion else None
+                } if emotion else None,
+                "optimization_applied": optimization is not None and optimization.confidence > 0.5
             }
 
-        except Exception as e:
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                logger.error(f"OOM hatası! Retry: {retry_count}")
+                self.device_manager.clear_cache()
+
+                if retry_count < CONFIG.max_retries:
+                    # Boyutu küçült ve tekrar dene
+                    new_width = max(256, width // 2)
+                    new_height = max(256, height // 2)
+                    logger.info(f"Boyut küçültülerek tekrar deneniyor: {new_width}x{new_height}")
+
+                    return self.generate(
+                        prompt=prompt,
+                        negative_prompt=negative_prompt,
+                        width=new_width,
+                        height=new_height,
+                        steps=steps,
+                        guidance_scale=guidance_scale,
+                        seed=seed,
+                        model_type=model_type,
+                        quality_mode=quality_mode,
+                        scene_type=scene_type,
+                        mood=mood,
+                        genre=genre,
+                        style=style,
+                        retry_count=retry_count + 1
+                    )
+
+            self._consecutive_failures += 1
             logger.error(f"Görsel üretim hatası: {e}")
-            import traceback
+            traceback.print_exc()
+
+            if self._consecutive_failures >= self._max_consecutive_failures:
+                logger.error("Çok fazla ardışık hata, model yeniden yükleniyor")
+                self.load_model(model_type, force_reload=True)
+
+            return None
+
+        except Exception as e:
+            self._consecutive_failures += 1
+            logger.error(f"Görsel üretim hatası: {e}")
             traceback.print_exc()
             return None
 
@@ -576,32 +699,40 @@ class GenerationJob:
     model_type: Optional[str] = None
     quality_mode: str = "balanced"
     style: str = "cinematic"
+    scene_type: str = ""
     mood: str = ""
+    genre: str = ""
     lighting: str = ""
     status: str = "pending"
     result: Optional[Dict] = None
     error: Optional[str] = None
     created_at: str = ""
     completed_at: Optional[str] = None
+    retry_count: int = 0
 
 class JobQueue:
-    """İş kuyruğu"""
-
     def __init__(self, generator: ImageGenerator, max_size: int = 10):
         self.generator = generator
         self.queue: queue.Queue = queue.Queue(maxsize=max_size)
         self.jobs: Dict[str, GenerationJob] = {}
         self.worker_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._shutdown = False
 
     def start_worker(self):
         if self.worker_thread is None or not self.worker_thread.is_alive():
+            self._shutdown = False
             self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
             self.worker_thread.start()
             logger.info("İş kuyruğu işçisi başlatıldı")
 
+    def stop_worker(self):
+        self._shutdown = True
+        if self.worker_thread:
+            self.worker_thread.join(timeout=5)
+
     def _worker_loop(self):
-        while True:
+        while not self._shutdown:
             try:
                 job_id = self.queue.get(timeout=1)
                 self._process_job(job_id)
@@ -642,9 +773,10 @@ class JobQueue:
                 seed=job.seed,
                 model_type=model_type,
                 quality_mode=quality_mode,
-                style=job.style,
+                scene_type=job.scene_type,
                 mood=job.mood,
-                lighting=job.lighting
+                genre=job.genre,
+                style=job.style
             )
 
             with self._lock:
@@ -686,54 +818,96 @@ class JobQueue:
                 "max_size": self.queue.maxsize
             }
 
+    def cleanup_old_jobs(self, max_age_hours: int = 24):
+        """Eski işleri temizle"""
+        now = datetime.now()
+        to_remove = []
+
+        with self._lock:
+            for job_id, job in self.jobs.items():
+                if job.completed_at:
+                    try:
+                        completed = datetime.fromisoformat(job.completed_at)
+                        age_hours = (now - completed).total_seconds() / 3600
+                        if age_hours > max_age_hours:
+                            to_remove.append(job_id)
+                    except:
+                        pass
+
+            for job_id in to_remove:
+                JobIdManager.remove(job_id)
+                del self.jobs[job_id]
+
+        if to_remove:
+            logger.info(f"{len(to_remove)} eski iş temizlendi")
+
 # ============== API ==============
 
 app = FastAPI(
-    title="Görsel Hikaye Üretici API",
-    description="Gelişmiş yerel Stable Diffusion görsel üretim servisi",
-    version="2.0.0"
+    title="Görsel Hikaye Üretici API v3.0",
+    description="Öğrenen, güvenli, optimize görsel üretim servisi",
+    version="3.0.0"
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS - ortama göre
+cors_config = get_cors_config(CONFIG.production)
+app.add_middleware(CORSMiddleware, **cors_config)
 
 # Global instances
 device_manager: Optional[DeviceManager] = None
 generator: Optional[ImageGenerator] = None
 job_queue: Optional[JobQueue] = None
+rate_limiter = RateLimiter(requests_per_minute=30)
+output_cleaner: Optional[OutputCleaner] = None
 
 # Pydantic models
 class GenerateRequest(BaseModel):
-    prompt: str
-    negative_prompt: str = ""
-    width: int = 512
-    height: int = 512
-    steps: int = 25
-    guidance_scale: float = 7.5
+    prompt: str = Field(..., min_length=1, max_length=2000)
+    negative_prompt: str = Field("", max_length=1000)
+    width: int = Field(512, ge=256, le=2048)
+    height: int = Field(512, ge=256, le=2048)
+    steps: int = Field(25, ge=1, le=100)
+    guidance_scale: float = Field(7.5, ge=1.0, le=20.0)
     seed: Optional[int] = None
     aspect_ratio: Optional[str] = None
     model: Optional[str] = None
     quality_mode: str = "balanced"
     style: str = "cinematic"
+    scene_type: str = ""
     mood: str = ""
+    genre: str = ""
     lighting: str = ""
+
+class FeedbackRequest(BaseModel):
+    job_id: str
+    overall_score: int = Field(..., ge=1, le=5)
+    prompt_accuracy: int = Field(3, ge=1, le=5)
+    emotion_accuracy: int = Field(3, ge=1, le=5)
+    composition_score: int = Field(3, ge=1, le=5)
+    issues: Dict[str, bool] = Field(default_factory=dict)
+    notes: str = ""
 
 class JobResponse(BaseModel):
     job_id: str
     status: str
     message: str
 
+# Rate limiting dependency
+async def check_rate_limit(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, wait_time = rate_limiter.is_allowed(client_ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Çok fazla istek. {wait_time} saniye bekleyin."
+        )
+
 @app.on_event("startup")
 async def startup():
-    global device_manager, generator, job_queue
+    global device_manager, generator, job_queue, output_cleaner
 
     logger.info("=" * 60)
-    logger.info("   GÖRSEL HİKAYE ÜRETİCİ v2.0 - GELİŞMİŞ BACKEND")
+    logger.info("   GÖRSEL HİKAYE ÜRETİCİ v3.0 - ÖĞRENEN BACKEND")
     logger.info("=" * 60)
 
     device_manager = DeviceManager()
@@ -741,19 +915,29 @@ async def startup():
     job_queue = JobQueue(generator, max_size=CONFIG.max_queue_size)
     job_queue.start_worker()
 
+    output_cleaner = OutputCleaner(CONFIG.output_dir)
+
     Path(CONFIG.output_dir).mkdir(parents=True, exist_ok=True)
+    Path("./data").mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Sunucu hazır: http://localhost:{CONFIG.port}")
     logger.info(f"Mod: {device_manager.mode.value.upper()}")
     if device_manager.gpu_info:
         logger.info(f"GPU: {device_manager.gpu_info} ({device_manager.vram_gb:.1f}GB)")
 
+@app.on_event("shutdown")
+async def shutdown():
+    if job_queue:
+        job_queue.stop_worker()
+    logger.info("Sunucu kapatılıyor")
+
 @app.get("/")
 async def root():
     return {
-        "service": "Görsel Hikaye Üretici v2.0",
+        "service": "Görsel Hikaye Üretici v3.0",
         "status": "online",
-        "mode": device_manager.mode.value if device_manager else "unknown"
+        "mode": device_manager.mode.value if device_manager else "unknown",
+        "features": ["learning", "emotion_analysis", "safety_filter", "auto_optimization"]
     }
 
 @app.get("/api/status")
@@ -769,12 +953,20 @@ async def get_status():
         if generator.current_model:
             current_model = MODEL_CONFIGS[generator.current_model]["name"]
 
+    # Öğrenme istatistikleri
+    learning_stats = {}
+    try:
+        learning_stats = learning_manager.get_learning_stats()
+    except:
+        pass
+
     return {
         "device": {
             "mode": device_manager.mode.value if device_manager else "unknown",
             "device": device_manager.device if device_manager else "unknown",
             "gpu_info": device_manager.gpu_info if device_manager else None,
-            "vram_gb": round(device_manager.vram_gb, 1) if device_manager else 0
+            "vram_gb": round(device_manager.vram_gb, 1) if device_manager else 0,
+            "vram_free_gb": round(device_manager.vram_free_gb, 1) if device_manager else 0
         },
         "model": {
             "loaded": model_loaded,
@@ -784,6 +976,7 @@ async def get_status():
             "recommended": recommended.value
         },
         "queue": queue_status,
+        "learning": learning_stats,
         "quality_modes": [
             {"id": m.value, "desc": QUALITY_SETTINGS[m]["desc"]}
             for m in QualityMode
@@ -793,8 +986,7 @@ async def get_status():
             "width": MODEL_CONFIGS[recommended]["default_size"],
             "height": MODEL_CONFIGS[recommended]["default_size"],
             "estimated_time": "15-30 saniye" if device_manager and device_manager.mode == DeviceMode.GPU else "2-5 dakika"
-        },
-        "offline_ready": model_loaded
+        }
     }
 
 @app.post("/api/load-model")
@@ -824,15 +1016,23 @@ async def load_model(model: Optional[str] = None):
     return {
         "status": "loading_started",
         "model": MODEL_CONFIGS[model_type]["name"],
-        "message": "Model yükleniyor (ilk seferde indirilecek)"
+        "message": "Model yükleniyor"
     }
 
-@app.post("/api/generate", response_model=JobResponse)
+@app.post("/api/generate", response_model=JobResponse, dependencies=[Depends(check_rate_limit)])
 async def generate_image(request: GenerateRequest):
     if not job_queue:
         raise HTTPException(500, "Kuyruk başlatılmadı")
 
-    # Aspect ratio'dan boyut hesapla
+    # İçerik güvenlik kontrolü
+    content_check = ContentFilter.check_prompt(request.prompt)
+    if not content_check.is_safe:
+        raise HTTPException(
+            400,
+            f"İçerik engellendi: {', '.join(content_check.blocked_categories)}"
+        )
+
+    # Boyut hesapla
     width, height = request.width, request.height
     recommended = device_manager.get_recommended_model() if device_manager else ModelType.SD15
     base_size = MODEL_CONFIGS[recommended]["default_size"]
@@ -849,10 +1049,12 @@ async def generate_image(request: GenerateRequest):
         if request.aspect_ratio in ratios:
             width, height = ratios[request.aspect_ratio]
 
-    job_id = f"job_{int(time.time() * 1000)}"
+    # Güvenli job ID
+    job_id = JobIdManager.generate()
+
     job = GenerationJob(
         job_id=job_id,
-        prompt=request.prompt,
+        prompt=content_check.sanitized_prompt,
         negative_prompt=request.negative_prompt,
         width=width,
         height=height,
@@ -862,7 +1064,9 @@ async def generate_image(request: GenerateRequest):
         model_type=request.model,
         quality_mode=request.quality_mode,
         style=request.style,
+        scene_type=request.scene_type,
         mood=request.mood,
+        genre=request.genre,
         lighting=request.lighting,
         created_at=datetime.now().isoformat()
     )
@@ -872,14 +1076,23 @@ async def generate_image(request: GenerateRequest):
 
     queue_status = job_queue.get_queue_status()
 
+    # Uyarılar varsa ekle
+    message = f"İş kuyruğa eklendi (sıra: {queue_status['pending']})"
+    if content_check.warning_categories:
+        message += f" [Uyarı: {', '.join(content_check.warning_categories)}]"
+
     return JobResponse(
         job_id=job_id,
         status="queued",
-        message=f"İş kuyruğa eklendi (sıra: {queue_status['pending']})"
+        message=message
     )
 
 @app.get("/api/job/{job_id}")
 async def get_job_status(job_id: str):
+    # Job ID güvenlik kontrolü
+    if not JobIdManager.validate(job_id):
+        raise HTTPException(400, "Geçersiz iş ID formatı")
+
     if not job_queue:
         raise HTTPException(500, "Kuyruk başlatılmadı")
 
@@ -895,26 +1108,100 @@ async def get_job_status(job_id: str):
             "model": job.result.get("model"),
             "seed": job.result.get("seed"),
             "enhanced_prompt": job.result.get("enhanced_prompt"),
-            "generation_time": job.result.get("generation_time")
+            "generation_time": job.result.get("generation_time"),
+            "emotion": job.result.get("emotion"),
+            "optimization_applied": job.result.get("optimization_applied")
         }
 
     return response
 
 @app.get("/api/image/{filename}")
 async def get_image(filename: str):
-    filepath = Path(CONFIG.output_dir) / filename
+    # Güvenlik: path sanitization
+    safe_filename = PathSecurity.sanitize_filename(filename)
+    filepath = Path(CONFIG.output_dir) / safe_filename
+
+    # Path traversal kontrolü
+    is_valid, error = PathSecurity.validate_path(str(filepath), CONFIG.output_dir)
+    if not is_valid:
+        raise HTTPException(400, error)
+
     if not filepath.exists():
         raise HTTPException(404, "Görsel bulunamadı")
+
     return FileResponse(filepath, media_type="image/png")
 
+@app.post("/api/feedback")
+async def submit_feedback(request: FeedbackRequest):
+    """Feedback kaydet ve öğrenmeyi tetikle"""
+    try:
+        # Generation'ı bul
+        gen = db.get_generation(request.job_id)
+        if not gen:
+            raise HTTPException(404, "Üretim bulunamadı")
+
+        # Feedback kaydet
+        feedback_id = learning_manager.record_feedback(
+            generation_id=gen.id,
+            overall_score=request.overall_score,
+            prompt_accuracy=request.prompt_accuracy,
+            emotion_accuracy=request.emotion_accuracy,
+            composition_score=request.composition_score,
+            issues=request.issues,
+            notes=request.notes
+        )
+
+        return {
+            "status": "success",
+            "feedback_id": feedback_id,
+            "message": "Feedback kaydedildi, öğrenme güncellendi"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Feedback hatası: {e}")
+        raise HTTPException(500, "Feedback kaydedilemedi")
+
+@app.get("/api/learning/stats")
+async def get_learning_stats():
+    """Öğrenme istatistiklerini getir"""
+    try:
+        stats = learning_manager.get_learning_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Öğrenme istatistikleri hatası: {e}")
+        return {}
+
+@app.post("/api/analyze-emotion")
+async def analyze_emotion(text: str):
+    """Metin duygu analizi"""
+    try:
+        result = emotion_analyzer.analyze(text)
+        return {
+            "primary_emotion": result.primary_emotion.value,
+            "intensity": result.intensity,
+            "secondary_emotions": [
+                {"emotion": e.value, "intensity": i}
+                for e, i in result.secondary_emotions
+            ],
+            "confidence": result.confidence,
+            "context_notes": result.context_notes,
+            "visual_prompt": emotion_analyzer.get_visual_prompt(result),
+            "mood_string": emotion_analyzer.get_mood_string(result)
+        }
+    except Exception as e:
+        logger.error(f"Duygu analizi hatası: {e}")
+        return {"error": str(e)}
+
 @app.get("/api/images")
-async def list_images():
+async def list_images(limit: int = 50):
     output_dir = Path(CONFIG.output_dir)
     if not output_dir.exists():
         return {"images": []}
 
     images = []
-    for f in sorted(output_dir.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True):
+    for f in sorted(output_dir.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
         images.append({
             "filename": f.name,
             "url": f"/api/image/{f.name}",
@@ -922,25 +1209,36 @@ async def list_images():
             "created": datetime.fromtimestamp(f.stat().st_mtime).isoformat()
         })
 
-    return {"images": images[:50]}
+    return {"images": images}
+
+@app.post("/api/cleanup")
+async def cleanup():
+    """Eski dosyaları temizle"""
+    removed = 0
+    if output_cleaner:
+        removed = output_cleaner.cleanup()
+    if job_queue:
+        job_queue.cleanup_old_jobs()
+    return {"removed_files": removed}
 
 # ============== Main ==============
 
 if __name__ == "__main__":
-    import uvicorn
-
     print("""
 ╔══════════════════════════════════════════════════════════════════╗
-║      GÖRSEL HİKAYE ÜRETİCİ v2.0 - GELİŞMİŞ YEREL BACKEND         ║
+║      GÖRSEL HİKAYE ÜRETİCİ v3.0 - ÖĞRENEN BACKEND                ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Özellikler:                                                     ║
-║  • Çoklu model: SD 1.5, SDXL, SDXL Turbo, SDXL Lightning        ║
-║  • Akıllı prompt zenginleştirme                                  ║
-║  • Kalite modları: Hızlı, Dengeli, Kaliteli, Ultra              ║
-║  • Stil bazlı optimizasyon                                       ║
+║  Yenilikler:                                                     ║
+║  • SQLite öğrenme sistemi                                        ║
+║  • Gelişmiş duygu analizi (sınıf + yoğunluk)                    ║
+║  • NSFW/şiddet filtreleme                                        ║
+║  • Prompt şişmesi önleme                                         ║
+║  • OOM koruması ve otomatik retry                                ║
+║  • Feedback tabanlı kalite iyileştirme                           ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Frontend: http://localhost:5173                                 ║
 ║  API: http://localhost:8765                                      ║
+║  Docs: http://localhost:8765/docs                                ║
 ╚══════════════════════════════════════════════════════════════════╝
     """)
 
