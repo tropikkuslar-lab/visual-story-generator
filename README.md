@@ -406,9 +406,23 @@ python server.py
 ```
 visual-story-generator/
 ├── src/
-│   ├── App.tsx              # Ana uygulama (tüm analiz fonksiyonları)
+│   ├── App.tsx              # Ana React bileşeni
 │   ├── main.tsx             # React giriş noktası
-│   └── index.css            # Global stiller
+│   ├── index.css            # Global stiller
+│   ├── types.ts             # TypeScript interface'leri
+│   ├── constants.ts         # Sabitler (stiller, çözünürlükler)
+│   ├── api.ts               # Backend API fonksiyonları
+│   ├── utils.ts             # Yardımcı fonksiyonlar
+│   ├── hooks/               # Custom React hooks
+│   │   ├── index.ts         # Hook exports
+│   │   └── useBackend.ts    # Backend bağlantı hook'u
+│   ├── components/          # Yeniden kullanılabilir bileşenler
+│   │   ├── index.ts         # Component exports
+│   │   └── BackendStatusBar.tsx # Backend durum çubuğu
+│   └── analyzers/           # Metin analiz modülleri
+│       ├── index.ts         # Analyzer exports
+│       ├── idiomPatterns.ts # Türkçe deyim/mecaz kalıpları
+│       └── abstractConcepts.ts # Soyut kavram görselleştirme
 ├── backend/
 │   ├── server.py            # FastAPI sunucusu (v3.0)
 │   ├── database.py          # SQLite veritabanı yönetimi
