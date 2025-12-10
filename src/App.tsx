@@ -2332,6 +2332,112 @@ function App() {
     return [...new Set(keywords)]; // Tekrarları kaldır
   };
 
+  // YENİ: Cümle yapısından konu-eylem-nesne çıkar (İÇERİK ÖNCELİĞİ)
+  const extractCoreContent = (text: string): { subject: string, action: string, objects: string[], description: string } => {
+    const lowerText = text.toLowerCase();
+
+    // Konu algılama (kim/ne?)
+    const subjectPatterns: Record<string, string> = {
+      'adam': 'a man', 'kadın': 'a woman', 'çocuk': 'a child', 'kız': 'a girl', 'oğlan': 'a boy',
+      'genç': 'a young person', 'yaşlı': 'an elderly person', 'anne': 'a mother', 'baba': 'a father',
+      'asker': 'a soldier', 'prenses': 'a princess', 'kral': 'a king', 'kraliçe': 'a queen',
+      'köylü': 'a villager', 'şövalye': 'a knight', 'büyücü': 'a wizard', 'cadı': 'a witch',
+      'hayalet': 'a ghost', 'canavar': 'a monster', 'ejderha': 'a dragon', 'peri': 'a fairy',
+      'kurt': 'a wolf', 'ayı': 'a bear', 'aslan': 'a lion', 'kartal': 'an eagle',
+      'at': 'a horse', 'kedi': 'a cat', 'köpek': 'a dog', 'kuş': 'a bird',
+      'denizci': 'a sailor', 'pilot': 'a pilot', 'doktor': 'a doctor', 'öğretmen': 'a teacher',
+      'ressam': 'an artist', 'müzisyen': 'a musician', 'yazar': 'a writer', 'şair': 'a poet',
+      'avcı': 'a hunter', 'balıkçı': 'a fisherman', 'çiftçi': 'a farmer', 'tüccar': 'a merchant',
+      'hırsız': 'a thief', 'dedektif': 'a detective', 'polis': 'a police officer', 'ninja': 'a ninja',
+      'samuray': 'a samurai', 'korsan': 'a pirate', 'robot': 'a robot', 'uzaylı': 'an alien',
+      'melek': 'an angel', 'şeytan': 'a demon', 'vampir': 'a vampire', 'zombi': 'a zombie',
+      'prens': 'a prince', 'kahraman': 'a hero', 'kötü adam': 'a villain', 'casus': 'a spy'
+    };
+
+    // Eylem algılama (ne yapıyor?)
+    const actionPatterns: Record<string, string> = {
+      'yürü': 'walking', 'koş': 'running', 'atla': 'jumping', 'uç': 'flying', 'yüz': 'swimming',
+      'otur': 'sitting', 'yat': 'lying down', 'dur': 'standing', 'bekle': 'waiting',
+      'bak': 'looking at', 'izle': 'watching', 'gör': 'seeing', 'seyre': 'observing',
+      'tut': 'holding', 'al': 'taking', 'ver': 'giving', 'at': 'throwing', 'yakala': 'catching',
+      'aç': 'opening', 'kapa': 'closing', 'kır': 'breaking', 'yap': 'making', 'çiz': 'drawing',
+      'oku': 'reading', 'yaz': 'writing', 'dinle': 'listening', 'konuş': 'talking', 'bağır': 'shouting',
+      'fısılda': 'whispering', 'ağla': 'crying', 'gül': 'laughing', 'gülümse': 'smiling',
+      'savaş': 'fighting', 'vur': 'hitting', 'kes': 'cutting', 'öldür': 'killing', 'kurtar': 'saving',
+      'kaç': 'escaping', 'saklan': 'hiding', 'ara': 'searching', 'bul': 'finding',
+      'ye': 'eating', 'iç': 'drinking', 'pişir': 'cooking', 'uyu': 'sleeping', 'uyan': 'waking up',
+      'git': 'going', 'gel': 'coming', 'dön': 'returning', 'kal': 'staying',
+      'tırman': 'climbing', 'in': 'descending', 'düş': 'falling', 'kay': 'sliding',
+      'öp': 'kissing', 'sarıl': 'hugging', 'dokun': 'touching', 'it': 'pushing', 'çek': 'pulling',
+      'dans': 'dancing', 'şarkı söyle': 'singing', 'çal': 'playing music', 'oyna': 'playing'
+    };
+
+    // Nesne/Mekan algılama (nerede/neyi?)
+    const objectPatterns: Record<string, string> = {
+      'ev': 'house', 'oda': 'room', 'salon': 'living room', 'mutfak': 'kitchen', 'yatak odası': 'bedroom',
+      'bahçe': 'garden', 'sokak': 'street', 'yol': 'road', 'köprü': 'bridge', 'merdiven': 'stairs',
+      'orman': 'forest', 'ağaç': 'tree', 'çiçek': 'flower', 'çimen': 'grass', 'yaprak': 'leaves',
+      'dağ': 'mountain', 'tepe': 'hill', 'vadi': 'valley', 'mağara': 'cave', 'uçurum': 'cliff',
+      'deniz': 'sea', 'okyanus': 'ocean', 'göl': 'lake', 'nehir': 'river', 'şelale': 'waterfall',
+      'plaj': 'beach', 'kum': 'sand', 'dalga': 'waves', 'kayık': 'boat', 'gemi': 'ship',
+      'gökyüzü': 'sky', 'bulut': 'cloud', 'güneş': 'sun', 'ay': 'moon', 'yıldız': 'stars',
+      'yağmur': 'rain', 'kar': 'snow', 'fırtına': 'storm', 'şimşek': 'lightning', 'gökkuşağı': 'rainbow',
+      'kale': 'castle', 'saray': 'palace', 'kule': 'tower', 'köy': 'village', 'şehir': 'city',
+      'kilise': 'church', 'cami': 'mosque', 'tapınak': 'temple', 'mezarlık': 'cemetery',
+      'kılıç': 'sword', 'kalkan': 'shield', 'ok': 'arrow', 'yay': 'bow', 'mızrak': 'spear',
+      'kitap': 'book', 'kalem': 'pen', 'kağıt': 'paper', 'mektup': 'letter', 'harita': 'map',
+      'ayna': 'mirror', 'kapı': 'door', 'pencere': 'window', 'masa': 'table', 'sandalye': 'chair',
+      'yatak': 'bed', 'perde': 'curtain', 'mum': 'candle', 'lamba': 'lamp', 'ateş': 'fire',
+      'taç': 'crown', 'yüzük': 'ring', 'kolye': 'necklace', 'hazine': 'treasure', 'altın': 'gold',
+      'araba': 'car', 'tren': 'train', 'uçak': 'airplane', 'bisiklet': 'bicycle', 'motosiklet': 'motorcycle'
+    };
+
+    let subject = '';
+    let action = '';
+    const objects: string[] = [];
+
+    // Konu bul
+    for (const [tr, en] of Object.entries(subjectPatterns)) {
+      if (findWithSuffixes(lowerText, tr)) {
+        subject = en;
+        break;
+      }
+    }
+
+    // Eylem bul
+    for (const [tr, en] of Object.entries(actionPatterns)) {
+      if (findWithSuffixes(lowerText, tr)) {
+        action = en;
+        break;
+      }
+    }
+
+    // Nesneler bul
+    for (const [tr, en] of Object.entries(objectPatterns)) {
+      if (findWithSuffixes(lowerText, tr)) {
+        objects.push(en);
+      }
+    }
+
+    // Açıklayıcı cümle oluştur
+    let description = '';
+    if (subject && action) {
+      description = `${subject} ${action}`;
+      if (objects.length > 0) {
+        description += ` near ${objects.slice(0, 3).join(', ')}`;
+      }
+    } else if (subject) {
+      description = subject;
+      if (objects.length > 0) {
+        description += ` in a scene with ${objects.slice(0, 3).join(', ')}`;
+      }
+    } else if (objects.length > 0) {
+      description = `scene featuring ${objects.slice(0, 4).join(', ')}`;
+    }
+
+    return { subject, action, objects: objects.slice(0, 5), description };
+  };
+
   // Scene analysis logic - ADVANCED VERSION
   const analyzeScene = (text: string, sceneNum: number): Scene => {
     const lowerText = text.toLowerCase();
@@ -2520,6 +2626,9 @@ function App() {
     // 12. Detay çıkarma
     const extractedKeywords = extractEnglishKeywords(text);
 
+    // 13. YENİ: Temel içerik çıkarma (KONU-EYLEM-NESNE)
+    const coreContent = extractCoreContent(text);
+
     // ============== GELİŞMİŞ ANALİZ ==============
 
     // Deyim ve mecaz algılama
@@ -2660,30 +2769,36 @@ function App() {
     const enhancedCameraAngle = perspectiveCamera || sceneTypeResult.cameraStyle || cameraAngle;
 
     // Sadık (Faithful) Prompt - Metne sadık
+    // ÖNEMLİ: İçerik (konu-eylem-nesne) EN BAŞTA olmalı!
     const faithfulParts = [
+      // === ÖNCE İÇERİK (en kritik kısım) ===
+      coreContent.description, // "a man walking near forest, tree" gibi
+      coreContent.objects.length > 0 ? coreContent.objects.join(', ') : '',
+      extractedKeywords.slice(0, 12).join(', '), // Daha fazla anahtar kelime
+      characterDescriptions ? `featuring ${characterDescriptions}` : '',
+      detectedActions.length > 0 ? `characters ${detectedActions.join(', ')}` : '',
+      envEnglish, // Çevre/mekan
+      // === SONRA STİL VE ATMOSFER ===
       qualityTags,
       styleEnglish[styleSettings.style] || 'cinematic style',
-      // Gelişmiş kamera ve kompozisyon
+      // Kamera ve kompozisyon
       cameraVariety.camera,
       cameraVariety.composition,
       cameraVariety.depth,
-      // Gelişmiş ışıklandırma
+      // Işıklandırma
       lightingVariety.lighting,
       lightingVariety.atmosphere,
       lightingVariety.colorGrade,
       // Detay zenginliği
       detailEnhancer,
-      // Deyim varsa öncelikli olarak kullan
+      // Deyim varsa kullan
       idiomVisuals,
       idiomLighting || lightingEnglish,
       idiomMood || moodEnglish,
-      // Karşıt kavramlar
+      // Ek görsel öğeler
       contrastVisual,
-      // Metaforik renkler
       colorMetaphorVisual,
-      // Soyut kavramlar
       abstractVisualsStr,
-      // Karmaşık istek öğeleri
       intentVisual,
       conditionalVisual,
       temporalVisual,
@@ -2692,7 +2807,6 @@ function App() {
       sensoryVisual,
       spatialComposition,
       narrativeStyle,
-      // Yeni gelişmiş öğeler
       genreVisual,
       genreAtmosphere,
       genreColorScheme,
@@ -2704,46 +2818,45 @@ function App() {
       actionCameraEffect,
       historicalVisual,
       historicalProps,
-      envEnglish,
       weather,
       enhancedCameraAngle,
-      characterDescriptions ? `featuring ${characterDescriptions}` : '',
-      detectedActions.length > 0 ? `characters ${detectedActions.join(', ')}` : '',
       characterPose !== 'natural pose' ? characterPose : '',
-      // Duygu yoğunluğu
       emotionResult.visualIntensity,
-      extractedKeywords.slice(0, 8).join(', '),
       colorEnglish[styleSettings.colorPalette] || '',
     ].filter(Boolean).join(', ');
 
     // Yaratıcı (Creative) Prompt - Artistik yorumlama
+    // ÖNEMLİ: İçerik önce, artistik yorumlama sonra!
     const creativeParts = [
+      // === ÖNCE İÇERİK ===
+      coreContent.description ? `artistic interpretation of ${coreContent.description}` : '',
+      coreContent.objects.length > 0 ? `featuring ${coreContent.objects.join(', ')}` : '',
+      extractedKeywords.slice(0, 12).join(', '),
+      characterDescriptions ? `starring ${characterDescriptions}` : '',
+      detectedActions.length > 0 ? `action: ${detectedActions.join(', ')}` : '',
+      `dramatic ${envEnglish}`,
+      // === SONRA STİL VE ARTİSTİK ÖĞELER ===
       creativeQualityTags,
-      // Sanatçı stil referansı
       artistStyle,
       'stunning composition',
       styleEnglish[styleSettings.style] || 'cinematic style',
-      // Gelişmiş kamera ve kompozisyon
+      // Kamera ve kompozisyon
       cameraVariety.camera,
       cameraVariety.composition,
       cameraVariety.depth,
-      // Gelişmiş ışıklandırma
+      // Işıklandırma
       lightingVariety.lighting,
       lightingVariety.atmosphere,
       lightingVariety.colorGrade,
-      // Detay zenginliği
       detailEnhancer,
-      // Deyim görsellerini dramatik şekilde ekle
+      // Deyim görselleri
       idiomVisuals ? `powerful ${idiomVisuals}` : '',
       idiomLighting ? idiomLighting : `enhanced ${lightingEnglish}`,
       idiomMood ? `overwhelming ${idiomMood}` : `intense ${moodEnglish}`,
-      // Karşıt kavramlar - dramatik zıtlık
+      // Artistik öğeler
       contrastVisual ? `striking duality: ${contrastVisual}` : '',
-      // Metaforik renkler - artistik
       colorMetaphorVisual ? `color symbolism: ${colorMetaphorVisual}` : '',
-      // Soyut kavramlar - yaratıcı yorumlama
       abstractVisualsStr ? `symbolic elements: ${abstractVisualsStr}` : '',
-      // Karmaşık istek öğeleri - artistik yorumlama
       intentVisual ? `emotional intent: ${intentVisual}` : '',
       conditionalVisual ? `dreamlike atmosphere: ${conditionalVisual}` : '',
       temporalVisual ? `temporal effect: ${temporalVisual}` : '',
@@ -2752,7 +2865,6 @@ function App() {
       sensoryVisual ? `sensory immersion: ${sensoryVisual}` : '',
       spatialComposition ? `spatial depth: ${spatialComposition}` : '',
       narrativeStyle ? `complex narrative: ${narrativeStyle}` : '',
-      // Yeni gelişmiş öğeler - artistik yorumlama
       genreVisual ? `genre aesthetic: ${genreVisual}` : '',
       genreAtmosphere ? `atmosphere: ${genreAtmosphere}` : '',
       genreColorScheme ? `color palette: ${genreColorScheme}` : '',
@@ -2764,15 +2876,10 @@ function App() {
       actionCameraEffect ? `dynamic camera: ${actionCameraEffect}` : '',
       historicalVisual ? `period aesthetic: ${historicalVisual}` : '',
       historicalProps ? `period props: ${historicalProps}` : '',
-      `dramatic ${envEnglish}`,
       weather ? `atmospheric ${weather}` : '',
       'dynamic perspective',
       enhancedCameraAngle,
-      characterDescriptions ? `starring ${characterDescriptions}` : '',
-      detectedActions.length > 0 ? `action: ${detectedActions.join(', ')}` : '',
-      // Birden fazla deyim varsa karma duygu
       allIdioms.length > 1 ? `complex emotional layers: ${allIdioms.map(i => i.mood).join(' intertwined with ')}` : '',
-      // Yoğun duygu ifadesi
       emotionResult.intensity >= 7 ? 'emotionally charged, expressive, dramatic impact' : '',
       colorEnglish[styleSettings.colorPalette] || '',
     ].filter(Boolean).join(', ');
