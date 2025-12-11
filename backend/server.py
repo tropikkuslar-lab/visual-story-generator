@@ -453,9 +453,11 @@ class ImageGenerator:
         mood: str = "",
         genre: str = "",
         style: str = "cinematic",
+        remove_background: bool = False,  # Şeffaf arka plan
+        progress_callback: Optional[callable] = None,  # Progress bildirimi
         retry_count: int = 0
     ) -> Optional[Dict[str, Any]]:
-        """OOM korumalı görsel üretimi"""
+        """OOM korumalı görsel üretimi - Şeffaf arka plan destekli"""
 
         if model_type is None:
             model_type = self.device_manager.get_recommended_model()
@@ -548,6 +550,16 @@ class ImageGenerator:
 
             start_time = time.time()
 
+            # Progress callback wrapper
+            def step_callback(step, timestep, latents):
+                if progress_callback:
+                    progress = int((step / steps) * 80)  # 0-80% üretim
+                    progress_callback(progress, f"Görsel oluşturuluyor... ({step}/{steps})")
+
+            # İlk progress
+            if progress_callback:
+                progress_callback(5, "Model hazırlanıyor...")
+
             # Üretim
             with torch.inference_mode():
                 result = pipe(
@@ -557,10 +569,39 @@ class ImageGenerator:
                     height=height,
                     num_inference_steps=steps,
                     guidance_scale=guidance_scale,
-                    generator=generator
+                    generator=generator,
+                    callback=step_callback,
+                    callback_steps=1
                 )
 
             image = result.images[0]
+
+            # Arka plan kaldırma (istenirse)
+            if remove_background:
+                if progress_callback:
+                    progress_callback(85, "Arka plan kaldırılıyor...")
+                try:
+                    from rembg import remove
+                    from PIL import Image
+                    import io
+
+                    # PIL Image'ı bytes'a çevir
+                    img_bytes = io.BytesIO()
+                    image.save(img_bytes, format='PNG')
+                    img_bytes.seek(0)
+
+                    # Arka planı kaldır
+                    output_bytes = remove(img_bytes.read())
+                    image = Image.open(io.BytesIO(output_bytes))
+                    logger.info("Arka plan başarıyla kaldırıldı")
+
+                except ImportError:
+                    logger.warning("rembg kurulu değil! pip install rembg ile kurun")
+                except Exception as e:
+                    logger.warning(f"Arka plan kaldırma hatası: {e}")
+
+            if progress_callback:
+                progress_callback(95, "Görsel kaydediliyor...")
 
             # Kaydet
             output_dir = Path(CONFIG.output_dir)
@@ -569,7 +610,8 @@ class ImageGenerator:
             filename = PathSecurity.generate_secure_filename("scene", ".png")
             filepath = output_dir / filename
 
-            image.save(filepath, quality=95)
+            # PNG olarak kaydet (şeffaflık korunur)
+            image.save(filepath, format='PNG')
 
             elapsed = time.time() - start_time
             logger.info(f"Görsel üretildi: {filename} ({elapsed:.1f}s)")
@@ -681,12 +723,16 @@ class GenerationJob:
     mood: str = ""
     genre: str = ""
     lighting: str = ""
+    remove_background: bool = False  # Şeffaf arka plan
     status: str = "pending"
+    progress: int = 0  # 0-100 arası ilerleme
+    progress_message: str = ""  # İlerleme mesajı
     result: Optional[Dict] = None
     error: Optional[str] = None
     created_at: str = ""
     completed_at: Optional[str] = None
     retry_count: int = 0
+    cancelled: bool = False  # İptal edildi mi
 
 class JobQueue:
     def __init__(self, generator: ImageGenerator, max_size: int = 10):
@@ -726,8 +772,24 @@ class JobQueue:
                 return
             job = self.jobs[job_id]
             job.status = "processing"
+            job.progress = 0
+            job.progress_message = "Başlatılıyor..."
+
+        # Progress callback fonksiyonu
+        def update_progress(progress: int, message: str):
+            with self._lock:
+                if job_id in self.jobs:
+                    self.jobs[job_id].progress = progress
+                    self.jobs[job_id].progress_message = message
 
         try:
+            # İptal kontrolü
+            with self._lock:
+                if self.jobs[job_id].cancelled:
+                    self.jobs[job_id].status = "cancelled"
+                    self.jobs[job_id].progress_message = "İptal edildi"
+                    return
+
             model_type = None
             if job.model_type:
                 try:
@@ -754,23 +816,48 @@ class JobQueue:
                 scene_type=job.scene_type,
                 mood=job.mood,
                 genre=job.genre,
-                style=job.style
+                style=job.style,
+                remove_background=job.remove_background,
+                progress_callback=update_progress
             )
 
             with self._lock:
+                # Son iptal kontrolü
+                if self.jobs[job_id].cancelled:
+                    self.jobs[job_id].status = "cancelled"
+                    self.jobs[job_id].progress = 0
+                    self.jobs[job_id].progress_message = "İptal edildi"
+                    return
+
                 if result:
                     job.status = "completed"
                     job.result = result
+                    job.progress = 100
+                    job.progress_message = "Tamamlandı!"
                 else:
                     job.status = "failed"
                     job.error = "Görsel üretilemedi"
+                    job.progress_message = "Hata oluştu"
                 job.completed_at = datetime.now().isoformat()
 
         except Exception as e:
             with self._lock:
                 job.status = "failed"
                 job.error = str(e)
+                job.progress_message = f"Hata: {str(e)[:50]}"
                 job.completed_at = datetime.now().isoformat()
+
+    def cancel_job(self, job_id: str) -> bool:
+        """İşi iptal et"""
+        with self._lock:
+            if job_id in self.jobs:
+                job = self.jobs[job_id]
+                if job.status in ["pending", "processing"]:
+                    job.cancelled = True
+                    job.status = "cancelled"
+                    job.progress_message = "Kullanıcı tarafından iptal edildi"
+                    return True
+        return False
 
     def add_job(self, job: GenerationJob) -> bool:
         try:
@@ -855,6 +942,20 @@ class GenerateRequest(BaseModel):
     mood: str = ""
     genre: str = ""
     lighting: str = ""
+    remove_background: bool = False  # Şeffaf arka plan isteniyor mu
+
+# Düşük puan nedenleri
+class LowScoreReason(str, Enum):
+    IRRELEVANT_IMAGE = "irrelevant_image"  # Alakasız resim
+    WRONG_SUBJECT = "wrong_subject"  # Yanlış konu
+    BAD_QUALITY = "bad_quality"  # Düşük kalite
+    WRONG_STYLE = "wrong_style"  # Yanlış stil
+    ANATOMICAL_ERROR = "anatomical_error"  # Anatomi hatası
+    WRONG_COLORS = "wrong_colors"  # Yanlış renkler
+    WRONG_LIGHTING = "wrong_lighting"  # Yanlış ışık
+    WRONG_COMPOSITION = "wrong_composition"  # Yanlış kompozisyon
+    RESOLUTION_ISSUE = "resolution_issue"  # Çözünürlük sorunu
+    OTHER = "other"  # Diğer
 
 class FeedbackRequest(BaseModel):
     job_id: str
@@ -864,6 +965,10 @@ class FeedbackRequest(BaseModel):
     composition_score: int = Field(3, ge=1, le=5)
     issues: Dict[str, bool] = Field(default_factory=dict)
     notes: str = ""
+    # Düşük puan nedenleri (3 ve altı puan için)
+    low_score_reasons: List[str] = Field(default_factory=list)
+    low_score_details: str = ""  # Detaylı açıklama
+    was_cancelled: bool = False  # Üretim iptal edildi mi
 
 class JobResponse(BaseModel):
     job_id: str
@@ -1046,6 +1151,7 @@ async def generate_image(request: GenerateRequest):
         mood=request.mood,
         genre=request.genre,
         lighting=request.lighting,
+        remove_background=request.remove_background,  # Şeffaf arka plan
         created_at=datetime.now().isoformat()
     )
 
@@ -1080,6 +1186,11 @@ async def get_job_status(job_id: str):
 
     response = asdict(job)
 
+    # Progress bilgisi ekle
+    response["progress"] = job.progress
+    response["progress_message"] = job.progress_message
+    response["can_rate"] = job.status == "completed" and not job.cancelled
+
     if job.status == "completed" and job.result:
         response["image_url"] = f"/api/image/{job.result['filename']}"
         response["generation_info"] = {
@@ -1092,6 +1203,26 @@ async def get_job_status(job_id: str):
         }
 
     return response
+
+@app.post("/api/job/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    """İşi iptal et - iptal edilen işler değerlendirilemez"""
+    if not JobIdManager.validate(job_id):
+        raise HTTPException(400, "Geçersiz iş ID formatı")
+
+    if not job_queue:
+        raise HTTPException(500, "Kuyruk başlatılmadı")
+
+    success = job_queue.cancel_job(job_id)
+
+    if success:
+        return {
+            "status": "cancelled",
+            "message": "İş iptal edildi. İptal edilen işler değerlendirilemez.",
+            "can_rate": False
+        }
+    else:
+        raise HTTPException(400, "İş iptal edilemedi (zaten tamamlanmış olabilir)")
 
 @app.get("/api/image/{filename}")
 async def get_image(filename: str):
@@ -1150,6 +1281,25 @@ async def get_learning_stats():
     except Exception as e:
         logger.error(f"Öğrenme istatistikleri hatası: {e}")
         return {}
+
+@app.get("/api/feedback/low-score-reasons")
+async def get_low_score_reasons():
+    """Düşük puan nedenleri listesi - Frontend bu listeyi kullanıcıya gösterir"""
+    return {
+        "reasons": [
+            {"id": "irrelevant_image", "tr": "Alakasız resim üretildi", "en": "Irrelevant image generated"},
+            {"id": "wrong_subject", "tr": "Yanlış konu/karakter", "en": "Wrong subject/character"},
+            {"id": "bad_quality", "tr": "Düşük görsel kalite", "en": "Low visual quality"},
+            {"id": "wrong_style", "tr": "İstenen stil uygulanmadı", "en": "Wrong style applied"},
+            {"id": "anatomical_error", "tr": "Anatomi/vücut hatası", "en": "Anatomical/body error"},
+            {"id": "wrong_colors", "tr": "Yanlış renkler", "en": "Wrong colors"},
+            {"id": "wrong_lighting", "tr": "Yanlış aydınlatma", "en": "Wrong lighting"},
+            {"id": "wrong_composition", "tr": "Yanlış kompozisyon", "en": "Wrong composition"},
+            {"id": "resolution_issue", "tr": "Çözünürlük sorunu", "en": "Resolution issue"},
+            {"id": "other", "tr": "Diğer (açıklama yazın)", "en": "Other (please explain)"}
+        ],
+        "note": "3 veya altı puan verirseniz neden seçmeniz gerekir"
+    }
 
 @app.post("/api/analyze-emotion")
 async def analyze_emotion(text: str):
