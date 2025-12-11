@@ -144,21 +144,13 @@ CONFIG = ServerConfig()
 
 class UnifiedPromptEnhancer:
     """
-    Tek noktadan prompt güçlendirme - Şişmeyi önler.
-    Frontend'den gelen prompt'u ZATENzenginleştirilmiş kabul eder,
-    sadece eksik kritik öğeleri ekler.
+    MİNİMAL prompt işleyici - Prompt şişmesini ÖNLER.
+    Frontend zaten optimize edilmiş kısa prompt gönderir.
+    Backend sadece HAM prompt'u kullanır, ek yapmaz!
+
+    Stable Diffusion sadece ilk ~77 token'a odaklanır.
+    Fazla ek = içeriğin boğulması = alakasız resimler!
     """
-
-    # Temel kalite etiketleri (sadece eksikse ekle)
-    CORE_QUALITY = ["best quality", "highly detailed"]
-
-    # Model-spesifik zorunlu ekler
-    MODEL_REQUIREMENTS = {
-        ModelType.SD15: [],
-        ModelType.SDXL: ["masterpiece"],
-        ModelType.SDXL_TURBO: [],
-        ModelType.SDXL_LIGHTNING: []
-    }
 
     # Temel negatif prompt (her zaman ekle)
     BASE_NEGATIVE = (
@@ -177,48 +169,25 @@ class UnifiedPromptEnhancer:
         add_core_quality: bool = True
     ) -> str:
         """
-        Prompt'u minimum düzeyde zenginleştir.
-        ÖNEMLİ: İçerik (prompt) EN BAŞTA olmalı, kalite etiketleri SONRA!
-        Frontend zaten içerik öncelikli prompt gönderir.
+        Prompt'u MİNİMAL düzeyde işle.
+        Frontend zaten içerik öncelikli kısa prompt gönderir.
+        Backend SADECE temizlik yapar, ek YAPMAZ!
         """
-        parts = []
+        # Frontend'den gelen prompt zaten optimize edilmiş
+        # Sadece temizle ve döndür
+        clean_prompt = prompt.strip()
 
-        # ===== İÇERİK (PROMPT) EN BAŞTA =====
-        # Bu en kritik kısım - AI modeli ilk kelimelere öncelik verir
-        parts.append(prompt.strip())
+        # Çok uzunsa kes (77 token ~ 300 karakter)
+        if len(clean_prompt) > 350:
+            # Son virgülden önce kes
+            clean_prompt = clean_prompt[:350]
+            last_comma = clean_prompt.rfind(',')
+            if last_comma > 200:
+                clean_prompt = clean_prompt[:last_comma]
 
-        # ===== KALİTE ETİKETLERİ SONRA =====
-        # Model zorunlu ekleri
-        model_reqs = cls.MODEL_REQUIREMENTS.get(model_type, [])
-        for req in model_reqs:
-            if req.lower() not in prompt.lower():
-                parts.append(req)
+        logger.info(f"[PROMPT] Uzunluk: {len(clean_prompt)} karakter")
 
-        # Çekirdek kalite (sadece yoksa)
-        if add_core_quality:
-            for tag in cls.CORE_QUALITY:
-                if tag.lower() not in prompt.lower():
-                    parts.append(tag)
-
-        # Öğrenme optimizasyonları (varsa ve güven yüksekse)
-        if optimization and optimization.confidence > 0.5:
-            for addition in optimization.prompt_additions[:3]:  # Max 3 ek
-                if addition.lower() not in prompt.lower():
-                    parts.append(addition)
-
-        # Duygu görsel ipuçları (varsa)
-        if emotion and emotion.intensity >= 5:
-            try:
-                visual = emotion_analyzer.get_visual_prompt(emotion)
-                if visual and len(visual) < 100:  # Çok uzun olmasın
-                    # Sadece atmosfer ekle, renk/ışık zaten prompt'ta olabilir
-                    atmosphere = emotion.visual_cues.get('atmosphere', '')
-                    if atmosphere and atmosphere.lower() not in prompt.lower():
-                        parts.append(atmosphere)
-            except:
-                pass
-
-        return ", ".join(parts)
+        return clean_prompt
 
     @classmethod
     def get_negative_prompt(

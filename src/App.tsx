@@ -2768,120 +2768,142 @@ function App() {
     // Sahne tipi kamera stilini kullan (daha spesifik)
     const enhancedCameraAngle = perspectiveCamera || sceneTypeResult.cameraStyle || cameraAngle;
 
-    // Sadık (Faithful) Prompt - Metne sadık
-    // ÖNEMLİ: İçerik (konu-eylem-nesne) EN BAŞTA olmalı!
+    // =============================================================
+    // YENİ BASİTLEŞTİRİLMİŞ PROMPT SİSTEMİ
+    // Stable Diffusion sadece ilk ~77 token'a odaklanır
+    // Bu yüzden prompt KISA ve ÖZ olmalı (max 50-60 kelime)
+    // =============================================================
+
+    // 1. ANA İÇERİK CÜMLESI (en kritik kısım - ilk 20-30 kelime)
+    const buildCorePrompt = (): string => {
+      const parts: string[] = [];
+
+      // Konu + Eylem + Mekan (ana cümle)
+      if (coreContent.subject && coreContent.action) {
+        parts.push(`${coreContent.subject} ${coreContent.action}`);
+      } else if (coreContent.subject) {
+        parts.push(coreContent.subject);
+      } else if (coreContent.description) {
+        parts.push(coreContent.description);
+      }
+
+      // Mekan/Ortam (varsa)
+      if (envEnglish && envEnglish !== 'scenic background') {
+        parts.push(`in ${envEnglish}`);
+      }
+
+      // Nesneler (max 3)
+      if (coreContent.objects.length > 0) {
+        parts.push(`with ${coreContent.objects.slice(0, 3).join(' and ')}`);
+      }
+
+      return parts.join(' ');
+    };
+
+    // 2. DESTEKLEYICI ANAHTAR KELİMELER (sonraki 15-20 kelime)
+    const buildSupportKeywords = (): string => {
+      const keywords: string[] = [];
+
+      // Hava durumu
+      if (weather) keywords.push(weather);
+
+      // Zaman dilimi ışığı
+      if (lightingEnglish) keywords.push(lightingEnglish);
+
+      // Ruh hali (varsa ve güçlüyse)
+      if (emotionResult.intensity >= 5 && moodEnglish !== 'neutral atmosphere') {
+        keywords.push(moodEnglish);
+      }
+
+      // Eylemler (max 2)
+      if (detectedActions.length > 0) {
+        keywords.push(...detectedActions.slice(0, 2));
+      }
+
+      // Önemli anahtar kelimeler (max 4)
+      const importantKeywords = extractedKeywords.slice(0, 4);
+      keywords.push(...importantKeywords);
+
+      return keywords.slice(0, 8).join(', ');
+    };
+
+    // 3. MİNİMAL STİL ETİKETLERİ (son 10-15 kelime)
+    const buildStyleTags = (): string => {
+      const styleParts: string[] = [];
+
+      // Temel stil
+      const style = styleEnglish[styleSettings.style];
+      if (style) {
+        // Sadece ilk 3-4 kelimeyi al
+        styleParts.push(style.split(',')[0].trim());
+      }
+
+      // Temel kalite (kısa)
+      styleParts.push('highly detailed');
+      styleParts.push('professional');
+
+      // Kamera açısı (basit)
+      if (enhancedCameraAngle && enhancedCameraAngle !== 'dynamic shot') {
+        styleParts.push(enhancedCameraAngle.split(',')[0].trim());
+      }
+
+      return styleParts.slice(0, 4).join(', ');
+    };
+
+    // FINAL PROMPT: İçerik + Destek + Stil (max ~50 kelime)
     const faithfulParts = [
-      // === ÖNCE İÇERİK (en kritik kısım) ===
-      coreContent.description, // "a man walking near forest, tree" gibi
-      coreContent.objects.length > 0 ? coreContent.objects.join(', ') : '',
-      extractedKeywords.slice(0, 12).join(', '), // Daha fazla anahtar kelime
-      characterDescriptions ? `featuring ${characterDescriptions}` : '',
-      detectedActions.length > 0 ? `characters ${detectedActions.join(', ')}` : '',
-      envEnglish, // Çevre/mekan
-      // === SONRA STİL VE ATMOSFER ===
-      qualityTags,
-      styleEnglish[styleSettings.style] || 'cinematic style',
-      // Kamera ve kompozisyon
-      cameraVariety.camera,
-      cameraVariety.composition,
-      cameraVariety.depth,
-      // Işıklandırma
-      lightingVariety.lighting,
-      lightingVariety.atmosphere,
-      lightingVariety.colorGrade,
-      // Detay zenginliği
-      detailEnhancer,
-      // Deyim varsa kullan
-      idiomVisuals,
-      idiomLighting || lightingEnglish,
-      idiomMood || moodEnglish,
-      // Ek görsel öğeler
-      contrastVisual,
-      colorMetaphorVisual,
-      abstractVisualsStr,
-      intentVisual,
-      conditionalVisual,
-      temporalVisual,
-      interactionVisual,
-      symbolsVisual,
-      sensoryVisual,
-      spatialComposition,
-      narrativeStyle,
-      genreVisual,
-      genreAtmosphere,
-      genreColorScheme,
-      dialogueToneVisual,
-      dialogueExpression,
-      relationshipVisual,
-      relationshipPose,
-      actionVisual,
-      actionCameraEffect,
-      historicalVisual,
-      historicalProps,
-      weather,
-      enhancedCameraAngle,
-      characterPose !== 'natural pose' ? characterPose : '',
-      emotionResult.visualIntensity,
-      colorEnglish[styleSettings.colorPalette] || '',
+      buildCorePrompt(),      // "a man walking in forest with trees"
+      buildSupportKeywords(), // "sunset, dramatic lighting, running"
+      buildStyleTags(),       // "cinematic, highly detailed, medium shot"
     ].filter(Boolean).join(', ');
 
-    // Yaratıcı (Creative) Prompt - Artistik yorumlama
-    // ÖNEMLİ: İçerik önce, artistik yorumlama sonra!
+    // Yaratıcı (Creative) Prompt - Artistik yorumlama (yine basit ve öz)
+    const buildCreativePrompt = (): string => {
+      const parts: string[] = [];
+
+      // Ana içerik (artistik versiyon)
+      if (coreContent.subject && coreContent.action) {
+        parts.push(`dramatic scene of ${coreContent.subject} ${coreContent.action}`);
+      } else if (coreContent.description) {
+        parts.push(`artistic ${coreContent.description}`);
+      }
+
+      // Mekan
+      if (envEnglish && envEnglish !== 'scenic background') {
+        parts.push(`in ${envEnglish}`);
+      }
+
+      return parts.join(' ');
+    };
+
+    const buildCreativeStyle = (): string => {
+      const parts: string[] = [];
+
+      // Atmosfer
+      if (moodEnglish !== 'neutral atmosphere') {
+        parts.push(moodEnglish);
+      }
+
+      // Işık
+      if (lightingEnglish) {
+        parts.push(lightingEnglish);
+      }
+
+      // Stil
+      parts.push('masterpiece');
+      parts.push('award winning');
+
+      const style = styleEnglish[styleSettings.style];
+      if (style) {
+        parts.push(style.split(',')[0].trim());
+      }
+
+      return parts.slice(0, 5).join(', ');
+    };
+
     const creativeParts = [
-      // === ÖNCE İÇERİK ===
-      coreContent.description ? `artistic interpretation of ${coreContent.description}` : '',
-      coreContent.objects.length > 0 ? `featuring ${coreContent.objects.join(', ')}` : '',
-      extractedKeywords.slice(0, 12).join(', '),
-      characterDescriptions ? `starring ${characterDescriptions}` : '',
-      detectedActions.length > 0 ? `action: ${detectedActions.join(', ')}` : '',
-      `dramatic ${envEnglish}`,
-      // === SONRA STİL VE ARTİSTİK ÖĞELER ===
-      creativeQualityTags,
-      artistStyle,
-      'stunning composition',
-      styleEnglish[styleSettings.style] || 'cinematic style',
-      // Kamera ve kompozisyon
-      cameraVariety.camera,
-      cameraVariety.composition,
-      cameraVariety.depth,
-      // Işıklandırma
-      lightingVariety.lighting,
-      lightingVariety.atmosphere,
-      lightingVariety.colorGrade,
-      detailEnhancer,
-      // Deyim görselleri
-      idiomVisuals ? `powerful ${idiomVisuals}` : '',
-      idiomLighting ? idiomLighting : `enhanced ${lightingEnglish}`,
-      idiomMood ? `overwhelming ${idiomMood}` : `intense ${moodEnglish}`,
-      // Artistik öğeler
-      contrastVisual ? `striking duality: ${contrastVisual}` : '',
-      colorMetaphorVisual ? `color symbolism: ${colorMetaphorVisual}` : '',
-      abstractVisualsStr ? `symbolic elements: ${abstractVisualsStr}` : '',
-      intentVisual ? `emotional intent: ${intentVisual}` : '',
-      conditionalVisual ? `dreamlike atmosphere: ${conditionalVisual}` : '',
-      temporalVisual ? `temporal effect: ${temporalVisual}` : '',
-      interactionVisual ? `dynamic interaction: ${interactionVisual}` : '',
-      symbolsVisual ? `rich symbolism: ${symbolsVisual}` : '',
-      sensoryVisual ? `sensory immersion: ${sensoryVisual}` : '',
-      spatialComposition ? `spatial depth: ${spatialComposition}` : '',
-      narrativeStyle ? `complex narrative: ${narrativeStyle}` : '',
-      genreVisual ? `genre aesthetic: ${genreVisual}` : '',
-      genreAtmosphere ? `atmosphere: ${genreAtmosphere}` : '',
-      genreColorScheme ? `color palette: ${genreColorScheme}` : '',
-      dialogueToneVisual ? `expressive dialogue: ${dialogueToneVisual}` : '',
-      dialogueExpression ? `character expression: ${dialogueExpression}` : '',
-      relationshipVisual ? `relationship dynamic: ${relationshipVisual}` : '',
-      relationshipPose ? `intimate pose: ${relationshipPose}` : '',
-      actionVisual ? `action intensity: ${actionVisual}` : '',
-      actionCameraEffect ? `dynamic camera: ${actionCameraEffect}` : '',
-      historicalVisual ? `period aesthetic: ${historicalVisual}` : '',
-      historicalProps ? `period props: ${historicalProps}` : '',
-      weather ? `atmospheric ${weather}` : '',
-      'dynamic perspective',
-      enhancedCameraAngle,
-      allIdioms.length > 1 ? `complex emotional layers: ${allIdioms.map(i => i.mood).join(' intertwined with ')}` : '',
-      emotionResult.intensity >= 7 ? 'emotionally charged, expressive, dramatic impact' : '',
-      colorEnglish[styleSettings.colorPalette] || '',
+      buildCreativePrompt(),
+      buildCreativeStyle(),
     ].filter(Boolean).join(', ');
 
     // Gelişmiş negatif prompt (tür ve stile göre optimize edilmiş)
