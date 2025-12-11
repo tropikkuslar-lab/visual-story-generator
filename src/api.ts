@@ -43,6 +43,7 @@ export async function startGeneration(params: {
   height: number;
   steps?: number;
   guidance_scale?: number;
+  remove_background?: boolean;  // Şeffaf arka plan
 }): Promise<{ job_id: string } | null> {
   try {
     const response = await fetch(`${BACKEND_URL}/api/generate`, {
@@ -55,6 +56,7 @@ export async function startGeneration(params: {
         height: params.height,
         steps: params.steps || 25,
         guidance_scale: params.guidance_scale || 7.5,
+        remove_background: params.remove_background || false,
       }),
     });
 
@@ -66,6 +68,42 @@ export async function startGeneration(params: {
     return await response.json();
   } catch (error) {
     console.error('Generation error:', error);
+    return null;
+  }
+}
+
+/**
+ * Cancel a job
+ */
+export async function cancelJob(jobId: string): Promise<{ success: boolean; can_rate: boolean }> {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/job/${jobId}/cancel`, {
+      method: 'POST',
+    });
+    if (response.ok) {
+      const data = await response.json();
+      return { success: true, can_rate: data.can_rate };
+    }
+    return { success: false, can_rate: false };
+  } catch {
+    return { success: false, can_rate: false };
+  }
+}
+
+/**
+ * Get low score reasons list
+ */
+export async function getLowScoreReasons(): Promise<{
+  reasons: Array<{ id: string; tr: string; en: string }>;
+  note: string;
+} | null> {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/feedback/low-score-reasons`);
+    if (response.ok) {
+      return await response.json();
+    }
+    return null;
+  } catch {
     return null;
   }
 }
@@ -91,21 +129,31 @@ export async function getJobStatus(jobId: string): Promise<GenerationJob | null>
 export async function submitFeedback(params: {
   job_id: string;
   overall_score: number;
-  prompt_accuracy: number;
-  emotion_accuracy: number;
-  has_hand_issues?: boolean;
-  has_face_issues?: boolean;
-  has_blur_issues?: boolean;
-  has_text_issues?: boolean;
-  has_composition_issues?: boolean;
-  has_anatomy_issues?: boolean;
-  user_comment?: string;
+  prompt_accuracy?: number;
+  emotion_accuracy?: number;
+  composition_score?: number;
+  issues?: Record<string, boolean>;
+  notes?: string;
+  low_score_reasons?: string[];  // Düşük puan nedenleri
+  low_score_details?: string;    // Detaylı açıklama
+  was_cancelled?: boolean;       // İptal edildi mi
 }): Promise<boolean> {
   try {
     const response = await fetch(`${BACKEND_URL}/api/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
+      body: JSON.stringify({
+        job_id: params.job_id,
+        overall_score: params.overall_score,
+        prompt_accuracy: params.prompt_accuracy || 3,
+        emotion_accuracy: params.emotion_accuracy || 3,
+        composition_score: params.composition_score || 3,
+        issues: params.issues || {},
+        notes: params.notes || '',
+        low_score_reasons: params.low_score_reasons || [],
+        low_score_details: params.low_score_details || '',
+        was_cancelled: params.was_cancelled || false,
+      }),
     });
     return response.ok;
   } catch {

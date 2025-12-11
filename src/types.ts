@@ -28,10 +28,29 @@ export interface BackendStatus {
 // Generation job interface
 export interface GenerationJob {
   job_id: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   result_path?: string;
   image_url?: string;
   error?: string;
+  // Progress bilgileri
+  progress: number;  // 0-100
+  progress_message: string;
+  can_rate: boolean;  // Değerlendirilebilir mi
+  cancelled: boolean;
+  // Sonuç bilgileri
+  generation_info?: {
+    model: string;
+    seed: number;
+    enhanced_prompt: string;
+    generation_time: number;
+  };
+}
+
+// Low score reason interface
+export interface LowScoreReason {
+  id: string;
+  tr: string;
+  en: string;
 }
 
 // Character interface
